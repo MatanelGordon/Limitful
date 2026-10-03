@@ -325,18 +325,23 @@ All time cases use a virtual monotonic clock and manual scheduler.
 | PW-012 | The worker-count-change event reports the previous and new counts | [D-090](./decisions.md#d-090-observability-is-event-driven-and-exposes-raw-data) | Ready |
 | PW-013 | Disposal returns only after every worker has reached the dead state | [architecture.md](./architecture.md#lifecycle-and-disposal) | Ready |
 | PW-014 | No worker is started before first use | [design-principles.md](./design-principles.md#functional-conventions) | Ready |
-| PW-015 | Whether the sampler runs at startup or only after the first interval | [D-020](./decisions.md#d-020-worker-count-comes-from-a-user-sampling-function) | **Blocked** — not decided |
-| PW-016 | Sampler behavior while a scale change is still settling | — | **Blocked** — not decided |
-| PW-017 | `Isolate`: a throwing task surfaces an error and the worker keeps looping, with capacity unchanged | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-018 | `Replace`: the failing worker retires and a **fresh** worker with a new identity restores capacity | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-019 | `Reduce capacity`: the worker retires without replacement, never below the minimum bound | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-020 | `Stop controller`: every worker drains and the owner moves to shutdown | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-021 | A worker-failure event fires under **every** policy, including `Isolate` | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-022 | Capacity is never silently lost: a vanished worker either reduces the reported count or is replaced | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-023 | A worker function failing on every iteration does not become a create/destroy spin | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-024 | Supervised retirement is still graceful: the current task finishes, even under `Stop controller` | [D-022](./decisions.md#d-022-workers-drain-gracefully-and-are-never-revived) | Ready |
-| PW-025 | A supervision callback may select the policy per failure from the error and recent history | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
-| PW-026 | Replacement backoff default and automatic escalation | — | **Blocked** — not decided |
+| PW-015 | By default, a configured sampler runs immediately when the pool first starts, before the first recurring interval | [D-170](./decisions.md#d-170-parallelworkers-makes-startup-sampling-configurable) | Ready |
+| PW-016 | Scheduled samples are skipped while a scale-up or graceful scale-down is still settling; the next regular tick after settlement may sample | [D-171](./decisions.md#d-171-parallelworkers-skips-sampling-during-worker-count-transitions) | Ready |
+| PW-017 | Retired — worker-loop supervision is not a public Parallel Workers behavior | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-018 | Retired — worker replacement is not a Parallel Workers behavior | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-019 | Retired — worker capacity is not reduced in response to a work-item failure | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-020 | Retired — a work-item failure does not stop the owning controller | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-021 | Retired — no worker-failure event exists | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-022 | Retired — worker-loop loss is not a public behavior | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-023 | Retired — no replacement cycle exists | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-024 | Retired — supervised retirement does not exist | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-025 | Retired — no supervision callback exists | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-026 | Retired — no replacement backoff exists | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-027 | With deferred startup sampling, the first evaluation occurs only after one full sampling interval | [D-170](./decisions.md#d-170-parallelworkers-makes-startup-sampling-configurable) | Ready |
+| PW-028 | Without an explicit minimum, the pool never scales below one worker | [D-172](./decisions.md#d-172-parallelworkers-defaults-to-one-minimum-worker) | Ready |
+| PW-029 | Construction rejects a missing, non-positive, or non-finite maximum worker count | [D-173](./decisions.md#d-173-parallelworkers-requires-an-explicit-maximum-worker-count) | Ready |
+| PW-030 | With a sampler and no explicit interval, sampling recurs at one-second intervals | [D-174](./decisions.md#d-174-parallelworkers-defaults-sampling-to-one-second) | Ready |
+| PW-031 | Retired — automatic escalation is unnecessary because worker replacement does not exist | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
 
 ### AsyncAccumulator (AA)
 

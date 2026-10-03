@@ -215,8 +215,8 @@ evaluation.
 **Consequences.** Scaling policy is injected, not configured by enum
 ([design-principles.md](./design-principles.md#policy-versus-mechanism)).
 
-**Open.** Default min/max counts, the default interval, whether the sampler runs
-at startup, and its behavior while a resize is settling.
+**Open.** Default min/max counts, the default interval, and sampler behavior while
+a resize is settling.
 
 ### D-021 Worker count changes by one per sample by default
 
@@ -1030,7 +1030,7 @@ that [observability.md](./subsystems/observability.md) warns about.
 
 ### D-130 Worker failure behavior is an explicit enumerated supervision policy
 
-**Status:** Accepted, with open items · **Source:** Round-4 grooming; resolves a prior open item
+**Status:** Superseded by [D-176](#d-176-parallelworkers-does-not-model-worker-loop-failure) · **Source:** Round-4 grooming; resolves a prior open item
 
 **Context.** A failing *task* is isolated ([INV-12](./architecture.md#invariants)),
 but a failing *worker loop* is different: if a worker dies and is not replaced,
@@ -1053,8 +1053,6 @@ worker"; [D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capac
 answers "what does this failure mean for capacity". They are deliberately separate.
 Operational lessons are borrowed from Go worker pools such as `ants`, not their API.
 
-**Open.** Replacement backoff default, and whether repeated replacement failures
-escalate to `Stop controller` automatically.
 
 ### D-131 Batches flush on size, weight, interval, manual request, or shutdown
 
@@ -1194,8 +1192,8 @@ single limit only" versus "multi-limit" — rather than as a boolean.
    contract, advisory queries, and deadline-aware admission
    ([D-110](#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)
    through [D-115](#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy)).
-3. **Worker supervision**
-   ([D-130](#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)).
+3. **Worker-loop resilience**
+   ([D-176](#d-176-parallelworkers-does-not-model-worker-loop-failure)).
 4. **Outcome classification**
    ([D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures)).
 
@@ -1380,6 +1378,93 @@ failure is one atomic snapshot transition.
 Refresh uses an injectable monotonic clock/scheduler and cooperative
 cancellation/timeout; the default refresh timeout equals the interval.
 
+### D-170 ParallelWorkers makes startup sampling configurable
+
+**Status:** Accepted · **Source:** User decision
+
+**Decision.** When a `ParallelWorkers` instance has a sampling function, it
+evaluates that function immediately when the pool first starts by default, before
+the first recurring sampling interval. Callers may configure deferred startup
+sampling, which waits one full sampling interval before the initial evaluation.
+The recurring schedule begins from the initial evaluation in either mode.
+
+**Consequences.** The default lets the pool move toward the current desired count
+without an avoidable startup delay; deferred startup supports callers that need a
+full observation interval first. Neither mode starts workers before first use,
+and normal clamping and the scaling-delta limit still apply to the initial sample.
+
+### D-171 ParallelWorkers skips sampling during worker-count transitions
+
+**Status:** Accepted · **Source:** User decision
+
+**Decision.** While a `ParallelWorkers` scale-up or graceful scale-down is still
+transitioning the worker count, scheduled sampling ticks are skipped. They are
+neither evaluated concurrently nor retained for a later catch-up run. Once the
+transition settles, the next regular sampling tick may evaluate the sampler.
+
+**Consequences.** A resize is a stable decision boundary: no new target is based
+on an in-between worker count. This avoids overlapping scale decisions while
+preserving the configured sampling cadence and bounded work.
+
+### D-172 ParallelWorkers defaults to one minimum worker
+
+**Status:** Accepted · **Source:** User decision
+
+**Decision.** `ParallelWorkers` defaults `minWorkers` to `1`. A pool without an
+explicit minimum therefore never scales itself to zero workers.
+
+**Consequences.** The simple path remains ready to process work without a
+scale-from-zero transition. Callers may still configure a different explicit
+minimum when their workload needs it.
+
+### D-173 ParallelWorkers requires an explicit maximum worker count
+
+**Status:** Accepted · **Source:** User decision
+
+**Decision.** `ParallelWorkers` requires a finite, positive `maxWorkers` value
+at construction. It does not infer a standalone maximum from processor count or
+any other environment characteristic.
+
+**Consequences.** Every pool has a caller-owned, visible resource bound. Owning
+utilities may supply their own ceiling, but configuration still fails before work
+is accepted when no finite maximum is available.
+
+### D-174 ParallelWorkers defaults sampling to one second
+
+**Status:** Accepted · **Source:** User decision
+
+**Decision.** When `ParallelWorkers` has a sampling function and no explicit
+sampling interval, it samples every one second. The interval remains configurable.
+
+**Consequences.** Dynamic pools have a predictable responsive default without
+requiring timing configuration. The injected clock and scheduler keep this timing
+deterministic in tests.
+
+### D-175 ParallelWorkers defaults replacement backoff to one second
+
+**Status:** Superseded by [D-176](#d-176-parallelworkers-does-not-model-worker-loop-failure) · **Source:** User decision
+
+**Decision.** The default backoff between `Replace` policy worker replacements is
+one second. Callers may configure a different backoff.
+
+**Consequences.** A repeatedly failing worker function cannot cause an unbounded
+rapid create/destroy cycle. Replacement remains subject to the scaling delta and
+always creates a fresh worker.
+
+### D-176 ParallelWorkers does not model worker-loop failure
+
+**Status:** Accepted · **Source:** User decision; supersedes [D-130](#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) and [D-175](#d-175-parallelworkers-defaults-replacement-backoff-to-one-second)
+
+**Decision.** A Parallel Workers worker is a long-lived protected loop. It catches
+each work-item failure, emits the ordinary error event, and continues. Worker-loop
+failure is not modeled as a public behavior, so the utility exposes no supervision
+policy, worker replacement, replacement backoff, or automatic escalation path.
+
+**Consequences.** A failed work item is isolated without changing worker capacity.
+The former worker-supervision and replacement test cases are retired. A defect that
+escapes the internal loop is an implementation defect, not a caller-configurable
+runtime policy.
+
 ## Superseded and rejected
 
 Preserved deliberately. These are the readings and alternatives that were
@@ -1519,8 +1604,6 @@ answer. **A blocked test case must never be implemented by guessing**
 | Naming | `GroupedRateController` versus the earlier `GrouppedRateController` spelling | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Consolidation |
 | Shutdown | Disposition of callers already awaiting insertion when shutdown begins | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Q&A Q3 |
 | Shutdown | Whether disposal is idempotent | [architecture.md](./architecture.md#open-items) | Consolidation |
-| Workers | Default min/max worker counts and default sampling interval | [parallel-workers.md](./utilities/parallel-workers.md#open-items) | Consolidation |
-| Workers | Whether the sampler runs at startup, and its behavior during a settling resize | [parallel-workers.md](./utilities/parallel-workers.md#open-items) | Consolidation |
 | Redis | The non-frozen membership policy and which policy is the default | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Q&A Q1 |
 | Redis | Whether the membership set and last-seen key co-locate under one hash tag | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | `CLAUDE.md` |
 | Redis | Division of `N` across processes, including integer remainders | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
@@ -1540,7 +1623,6 @@ answer. **A blocked test case must never be implemented by guessing**
 | Keyed registry | Whether idle TTL runs from last submission or from the moment the controller became empty | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
 | Keyed registry | Eviction selection among several evictable keys, and whether eviction may be preemptive | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
 | Keyed registry | Whether per-key cross-instance scopes are affordable at 10,000 keys | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
-| Workers | Replacement backoff default, and whether repeated replacement failures escalate to `Stop controller` | [parallel-workers.md](./utilities/parallel-workers.md#open-items) | Round 4 |
 | Adaptive | Whether `RetryDecorator` and the adaptive policy share one outcome-classification type | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
 | Adaptive | The congestion preset's algorithm and latency-signal source | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
 | Adaptive | Whether the 80/20 safety-pressure guidance is a default or only documentation | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |

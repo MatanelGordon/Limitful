@@ -161,9 +161,9 @@ one is never a local decision.
 - **A keyed registry never evicts a key with queued or in-flight work**, and
   reaching the key limit rejects the newcomer instead
   ([D-122](./docs/decisions.md#d-122-eviction-never-discards-live-work)).
-- **Worker capacity is never silently lost** — every worker failure emits an event
-  and either reduces the reported count or is replaced
-  ([D-130](./docs/decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)).
+- **A work-item failure never terminates a worker loop.** The loop catches,
+  reports, and continues; worker-loop failure is not a public behavior
+  ([D-176](./docs/decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure)).
 - **Adaptive behavior is never on by default**, and never raises a hard ceiling
   ([D-142](./docs/decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)).
 - **An insufficient synchronization provider fails configuration**, rather than
