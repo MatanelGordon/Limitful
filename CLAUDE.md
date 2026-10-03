@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Operational guide for coding agents and contributors working on **Limitee** — a
+Operational guide for coding agents and contributors working on **Limitful** — a
 fast, Bottleneck-style job queue and rate limiter, reimplemented natively in C#,
 TypeScript, Rust, Go, and Python.
 
@@ -20,19 +20,39 @@ and the disagreement is a bug in this file.
 | Defaults philosophy, functional conventions, policy vs mechanism | [docs/design-principles.md](./docs/design-principles.md) |
 | **Test behavior — the source of truth** | [docs/testing.md](./docs/testing.md) |
 | Why something is the way it is, and what is still open | [docs/decisions.md](./docs/decisions.md) |
+| **What every controller shares** — submission, `JobOptions`, admission queries | [docs/subsystems/controller-contract.md](./docs/subsystems/controller-contract.md) |
 | RateController | [docs/utilities/rate-controller.md](./docs/utilities/rate-controller.md) |
+| ThroughputController | [docs/utilities/throughput-controller.md](./docs/utilities/throughput-controller.md) |
+| KeyedControllerRegistry *(draft — build this next)* | [docs/utilities/keyed-controller-registry-draft.md](./docs/utilities/keyed-controller-registry-draft.md) |
 | GroupedRateController | [docs/utilities/grouped-rate-controller.md](./docs/utilities/grouped-rate-controller.md) |
 | ParallelWorkers | [docs/utilities/parallel-workers.md](./docs/utilities/parallel-workers.md) |
 | AsyncAccumulator | [docs/utilities/async-accumulator.md](./docs/utilities/async-accumulator.md) |
 | WeightedAsyncAccumulator | [docs/utilities/weighted-async-accumulator.md](./docs/utilities/weighted-async-accumulator.md) |
 | RetryDecorator | [docs/utilities/retry-decorator.md](./docs/utilities/retry-decorator.md) |
+| AdaptiveCapacityPolicy — opt-in adaptation, outcome classification | [docs/utilities/adaptive-capacity-policy.md](./docs/utilities/adaptive-capacity-policy.md) |
+| SynchronizationProvider — cross-instance coordination and capabilities | [docs/utilities/synchronization-provider.md](./docs/utilities/synchronization-provider.md) |
+| Probe — periodic measurement with freshness metadata | [docs/utilities/probe.md](./docs/utilities/probe.md) |
 | Queue, overflow, timeout stages, cancellation | [docs/subsystems/queue-and-admission.md](./docs/subsystems/queue-and-admission.md) |
-| Redis coordination, liveness, outage behavior | [docs/subsystems/redis-coordination.md](./docs/subsystems/redis-coordination.md) |
+| RedisSynchronizationProvider mechanics, liveness, outage behavior | [docs/subsystems/redis-coordination.md](./docs/subsystems/redis-coordination.md) |
 | Events, metrics, the optional OTel package | [docs/subsystems/observability.md](./docs/subsystems/observability.md) |
 
 `Q&A-Round-3.md` is the raw grooming transcript, kept for provenance. Its
 decisions are consolidated in [docs/decisions.md](./docs/decisions.md); cite the
 `D-nnn` record, not the transcript.
+
+**Build order** is recorded in
+[D-160](./docs/decisions.md#d-160-roadmap-order-keyed-registry-then-shared-job-options-then-supervision-then-outcome-classification):
+`KeyedControllerRegistry` → shared `JobOptions` and deadline estimation → worker
+supervision → outcome classification.
+
+**Canonical name and coordination boundary.** The project and library are
+`Limitful` ([D-162](./docs/decisions.md#d-162-limitful-is-the-canonical-project-and-library-name)).
+Controllers depend on the backend-neutral
+[`SynchronizationProvider`](./docs/utilities/synchronization-provider.md);
+[`redis-coordination.md`](./docs/subsystems/redis-coordination.md) is the concrete
+Redis provider's technical deep dive, not a competing public contract
+([D-163](./docs/decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
+[D-164](./docs/decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ## API philosophy
 
@@ -78,6 +98,16 @@ Functional first, objects only where a lifetime must be owned and disposed.
   class.
 - **Errors are never swallowed.** They reach the caller, an event, or both.
   Exhausted retries surface an **aggregated** error across all attempts.
+- **Never infer severity from a generic failure.** The caller classifies outcomes
+  — `Throttled`, `Overloaded`, `TransientFailure`, `CallerError` — and a bad user
+  payload must never cause a service to throttle itself
+  ([D-140](./docs/decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures)).
+- **Never silently ignore an option you do not support.** Reject it at submission
+  so a caller cannot build on a limit that is not being enforced
+  ([D-116](./docs/decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)).
+- **Never fabricate an estimate.** Return the absence type, or mark the value as
+  statistical rather than computed
+  ([D-114](./docs/decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent)).
 - **Validate configuration at construction** with actionable messages.
 - `Attempts`, never `Retries` — and it includes the initial execution.
 - C# and Rust use functional constructs and current language features: records,
@@ -98,8 +128,8 @@ min/max workers.
 **Admission** — overflow policy, queue capacity, the three timeout stages.
 **Batching** — weight function, outcome correlation mode, batch bounds.
 **Grouping** — group predicates, default-group policy, group priorities.
-**Storage and coordination** — the Redis adapter, key prefix, heartbeat and
-staleness intervals, outage membership policy.
+**Storage and coordination** — synchronization provider and scope; concrete
+provider adapters, namespaces, liveness intervals, and degraded-mode policy.
 
 Two rules:
 
@@ -120,13 +150,25 @@ one is never a local decision.
   queue-wait timeout, and cancellation of the job's own task.
 - **Every queue is bounded.** Overflow rejects by default; waiting is opt-in.
 - **`N` is the hard global in-flight ceiling.** A sampled worker count divides
-  that budget and is clamped to it. Only Redis fail-open may overshoot, boundedly.
+  that budget and is clamped to it. A documented provider-specific degraded mode
+  may weaken the coordinated guarantee only within its stated bound.
 - **Cancellation is terminal** — never retried, never overridable by a predicate.
 - **A retrying job holds no slot during backoff.**
 - A timed-out or cancelled queued item **never executes later**.
 - **Dead workers are never revived**; retiring workers finish their current task.
 - A batch **never exceeds its max weight**, except one over-max item running alone
   in flexible mode.
+- **A keyed registry never evicts a key with queued or in-flight work**, and
+  reaching the key limit rejects the newcomer instead
+  ([D-122](./docs/decisions.md#d-122-eviction-never-discards-live-work)).
+- **Worker capacity is never silently lost** — every worker failure emits an event
+  and either reduces the reported count or is replaced
+  ([D-130](./docs/decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)).
+- **Adaptive behavior is never on by default**, and never raises a hard ceiling
+  ([D-142](./docs/decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)).
+- **An insufficient synchronization provider fails configuration**, rather than
+  silently weakening a guarantee
+  ([D-150](./docs/decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)).
 - Distributed counting is **set-based**, never increment/decrement.
 - A failing task is **isolated** to itself.
 
@@ -170,7 +212,14 @@ one is never a local decision.
 
 ## Out of scope
 
-Durable queues and job persistence across crashes or restarts
+Full list with reasoning in
+[D-161](./docs/decisions.md#d-161-explicitly-out-of-scope): generic distributed job
+queueing in the synchronization provider · adaptive behavior on by default ·
+unbounded completed-job history · a built-in metrics database · exactly-once
+execution promises for user functions · framework-specific APIs in core, which
+ship as separate adapter packages instead.
+
+Also out of scope: durable queues and job persistence across crashes or restarts
 ([D-072](./docs/decisions.md#d-072-job-persistence-across-restarts-is-out-of-scope)) ·
 minimum job spacing · time-window or per-second rate limiting in `RateController`
 ([D-001](./docs/decisions.md#d-001-ratecontroller-limits-by-concurrency-not-by-time-window)) ·

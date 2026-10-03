@@ -1,6 +1,6 @@
 # Queue and Admission
 
-The bounded-queue primitive every Limitee utility is built on. It owns capacity,
+The bounded-queue primitive every Limitful utility is built on. It owns capacity,
 overflow behavior, the timeout stages, and the cancellation rules — so that each
 utility inherits the same reliability contract instead of reinventing it.
 
@@ -117,7 +117,7 @@ processed in turn
 Three properties of this mode are deliberate and must be documented wherever it
 is offered:
 
-- **Waiters are uncapped.** Limitee does **not** cap the number of callers waiting
+- **Waiters are uncapped.** Limitful does **not** cap the number of callers waiting
   outside a full queue. That memory and backpressure responsibility — including
   any unbounded set of admission waiters — belongs to the caller, who composes
   their own upstream controls, such as web-controller or middleware rate limiting

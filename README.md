@@ -1,4 +1,4 @@
-# Limitee
+# Limitful
 
 Load leveling for every stack: a fast, Bottleneck-style job queue and rate
 limiter for C#, TypeScript, Rust, Go, and Python.
@@ -40,7 +40,7 @@ working conventions.
 
 ## Design in one paragraph
 
-Limitee limits by **concurrency**, not by time windows. Every queue is bounded,
+Limitful limits by **concurrency**, not by time windows. Every queue is bounded,
 and a queued job is never dropped unannounced. Defaults are safe and require
 almost no configuration; every advanced behavior — scaling policy, retry
 predicates, backoff, weights, group routing, the clock, the Redis client — is

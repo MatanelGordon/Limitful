@@ -1,6 +1,6 @@
 # Architecture
 
-Limitee is a set of small load-leveling utilities that compose. Each utility owns
+Limitful is a set of small load-leveling utilities that compose. Each utility owns
 one concern, exposes raw events and metrics, and accepts user functions for every
 policy decision. There is no central scheduler, no god object, and no shared
 mutable registry.
@@ -34,8 +34,13 @@ flowchart TD
     RD["RetryDecorator"]
   end
 
-  subgraph Utilities["Utilities"]
+  subgraph Registries["Controller lifecycle managers"]
+    KCR["KeyedControllerRegistry"]
+  end
+
+  subgraph Utilities["Controllers and utilities"]
     RC["RateController"]
+    TC["ThroughputController"]
     GRC["GroupedRateController"]
     AA["AsyncAccumulator"]
     WAA["WeightedAsyncAccumulator"]
@@ -48,8 +53,8 @@ flowchart TD
   end
 
   subgraph Coordination["Optional coordination"]
-    TRK["Distributed tracker"]
-    ADP["User-supplied Redis adapter"]
+    SP["SynchronizationProvider"]
+    RP["Concrete provider\nfor example Redis"]
   end
 
   subgraph Observability["Observability"]
@@ -63,9 +68,13 @@ flowchart TD
   UBF --> WAA
 
   RD -->|"wraps any function, including an already-limited one"| RC
+  KCR -->|"one controller per dynamic key"| RC
+  KCR -.->|"or per-key pacing"| TC
   GRC --> RC
   RC --> PW
   RC --> BQ
+  TC --> BQ
+  TC --> CLK
   AA --> PW
   AA --> BQ
   WAA --> AA
@@ -73,13 +82,16 @@ flowchart TD
   BQ --> CLK
   RD --> CLK
 
-  RC -.->|"when enabled"| TRK
-  GRC -.->|"when enabled"| TRK
-  AA -.->|"when enabled"| TRK
-  PW -.->|"when enabled"| TRK
-  TRK --> ADP
+  RC -.->|"when configured"| SP
+  TC -.->|"when configured"| SP
+  GRC -.->|"when configured"| SP
+  AA -.->|"when configured"| SP
+  PW -.->|"when configured"| SP
+  SP --> RP
 
   RC --> EV
+  TC --> EV
+  KCR --> EV
   GRC --> EV
   AA --> EV
   WAA --> EV
@@ -89,7 +101,8 @@ flowchart TD
 ```
 
 Dotted edges are optional and absent by default: in-process, in-memory, zero
-dependencies ([D-080](./decisions.md#d-080-in-memory-by-default-redis-is-opt-in)).
+dependencies
+([D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)).
 
 ### Why `WeightedAsyncAccumulator` sits on `AsyncAccumulator`
 
@@ -115,11 +128,16 @@ The worker count never raises the ceiling. It only **divides a fixed budget**
 | [Bounded queue and admission](./subsystems/queue-and-admission.md) | Capacity bound, overflow policy, admission waiting, pre-admission and queue-wait timeouts, cancellation-before-start | Execution, retries, batching |
 | [ParallelWorkers](./utilities/parallel-workers.md) | Worker lifecycle, sampled worker count, scaling delta, graceful drain, worker events | Queue capacity, global ceilings, what the work is |
 | [RateController](./utilities/rate-controller.md) | The hard in-flight ceiling `N`, queueing of submitted jobs, failure isolation, rate metrics | Retries ([D-004](./decisions.md#d-004-ratecontroller-never-retries)), time-window limiting ([D-001](./decisions.md#d-001-ratecontroller-limits-by-concurrency-not-by-time-window)), batching |
-| [GroupedRateController](./utilities/grouped-rate-controller.md) | Static group definitions, group matching, per-group limits, shared-ceiling arbitration | Dynamic group creation, per-group retry policy |
+| [ThroughputController](./utilities/throughput-controller.md) | Time-based permission to start, pacing, optional quota and credit cost | A concurrency ceiling — compose with `RateController`; retries; batching |
+| [GroupedRateController](./utilities/grouped-rate-controller.md) | Static group definitions, group matching, per-group limits, shared-ceiling arbitration | Dynamic group creation ([D-060](./decisions.md#d-060-groups-are-static)), per-group retry policy |
+| [KeyedControllerRegistry](./utilities/keyed-controller-registry-draft.md) | Key resolution, per-key controller creation, idle expiry, max active keys, eviction safety | Admission itself — it owns no queue, no slot, and no timeout stage ([D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key)) |
 | [AsyncAccumulator](./utilities/async-accumulator.md) | Batch accumulation, batching-worker loop, outcome correlation, the three timeout stages | Rate limiting ([D-041](./decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller)), retrying a failed batch |
 | [WeightedAsyncAccumulator](./utilities/weighted-async-accumulator.md) | Weight computation at insertion, weight-budget admission, strict/flexible over-max policy | Anything already owned by `AsyncAccumulator` |
 | [RetryDecorator](./utilities/retry-decorator.md) | Attempt budget, backoff, retry predicate, attempt hooks, aggregated error, deferred retry queue | Concurrency, queueing, batching — it holds no slot while waiting ([INV-6](#invariants)) |
-| [Distributed tracker](./subsystems/redis-coordination.md) | Set-based membership and counting, liveness, fail-open fallback, key slotting | Connecting to Redis — the user injects an adapter ([D-085](./decisions.md#d-085-redis-access-goes-through-a-user-supplied-adapter)) |
+| [Shared controller contract](./subsystems/controller-contract.md) | Submission, `JobOptions`, advisory admission queries, deadline-aware admission | Capacity semantics — each controller defines what a slot or credit means ([D-110](./decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)) |
+| [AdaptiveCapacityPolicy](./utilities/adaptive-capacity-policy.md) | Opt-in capacity adaptation, outcome classification, overclock safeguards | Raising a hard ceiling; being enabled implicitly ([D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)) |
+| [SynchronizationProvider](./utilities/synchronization-provider.md) | Cross-instance permission and shared state, capability declaration | Executable work, payload transport, or naming a backend in a controller API ([D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)) |
+| [RedisSynchronizationProvider](./subsystems/redis-coordination.md) | Redis sets/claims, liveness, degraded divided-allocation fallback, keys/scripts, cluster slotting | The generic coordination contract or controller API; those belong to `SynchronizationProvider` ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) |
 | [Observability](./subsystems/observability.md) | Raw events, metrics snapshots, sampling event | Opinionated telemetry — OTel lives in a separate opt-in package ([D-091](./decisions.md#d-091-otel-is-a-separate-opt-in-package-per-language)) |
 
 ### Dependency rules
@@ -130,6 +148,14 @@ The worker count never raises the ceiling. It only **divides a fixed budget**
    re-entering admission) happens because the *caller* composed the two, not
    because the types know about each other.
 4. Cross-utility behavior is the caller's composition, never implicit wiring.
+5. `KeyedControllerRegistry` depends only on the
+   [shared controller contract](./subsystems/controller-contract.md), never on a
+   concrete controller type — that is why one registry serves concurrency limits,
+   pacing, or a composition of both
+   ([D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key)).
+6. A policy utility — [AdaptiveCapacityPolicy](./utilities/adaptive-capacity-policy.md),
+   [Probe](./utilities/probe.md) — is read-only with respect to the controller. It
+   proposes; the controller validates, clamps, and decides.
 
 ## Invariants
 
@@ -141,7 +167,7 @@ These hold in every language. A change to any of them is a specification change
 | **INV-1** | A queued job is never dropped unannounced, and never by dropping the oldest. |
 | **INV-2** | The only ways a queued job leaves without executing are announced to the caller: cancel-pending shutdown, an expired queue-wait timeout, or cancellation of the job's own task. |
 | **INV-3** | Every internal queue is bounded, with a configurable capacity, timeout set, and overflow strategy. |
-| **INV-4** | During coordinated operation, the configured `N` is the hard global in-flight ceiling. A sampled worker count only divides that budget and is clamped to `N`. The sole exception is Redis fail-open ([INV-11](#invariants)). |
+| **INV-4** | During healthy coordinated operation, the configured `N` is the hard global in-flight ceiling. A sampled worker count only divides that budget and is clamped to `N`. A provider-specific degraded mode may weaken that guarantee only within its documented bound and must report the degradation ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)). |
 | **INV-5** | Cancellation is terminal. It is never retried and never overridden by a user predicate. |
 | **INV-6** | A retrying job holds no concurrency slot while waiting between attempts. |
 | **INV-7** | An item that has timed out while queued, or whose task was cancelled, never executes later — it is removed, not merely abandoned by its caller. |
@@ -202,7 +228,7 @@ acquisition, never by trusting the worker count
 
 ## Composition guidance
 
-Limitee composes by wrapping functions, not by registering components with each
+Limitful composes by wrapping functions, not by registering components with each
 other. The caller decides the order, and the order is meaningful.
 
 > Illustrative pseudocode. No public API signature is committed yet.
@@ -284,7 +310,7 @@ runs on every submission.
 | --- | --- |
 | Expecting `RateController` to retry | It never does ([D-004](./decisions.md#d-004-ratecontroller-never-retries)). Wrap with `RetryDecorator`. |
 | Nesting a limiter inside its own job function | The inner acquisition can only wait on slots the outer call is holding. |
-| Unbounded `await insertion` with no upstream control | Limitee does not cap admission waiters; that memory is the caller's problem ([D-032](./decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)). |
+| Unbounded `await insertion` with no upstream control | Limitful does not cap admission waiters; that memory is the caller's problem ([D-032](./decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)). |
 | A heavy weight function or group predicate | Both run on the submission path. Weight is computed once at insertion ([D-052](./decisions.md#d-052-item-weight-is-computed-once-at-insertion)); predicates have no such cache. |
 
 ## Lifecycle and disposal
@@ -341,7 +367,8 @@ Rules that hold in both shutdown modes:
    jobs that never started complete as cancelled, visibly to their callers.
 5. **Disposal is ordered:** refuse new work → settle queued work per mode → drain
    workers → stop the heartbeat and distributed membership (graceful removal, see
-   [redis-coordination.md](./subsystems/redis-coordination.md)) → release
+   synchronization provider membership/claims (with concrete mechanics such as
+   [Redis](./subsystems/redis-coordination.md)) → release
    resources.
 6. **Nothing survives the process** ([INV-14](#invariants)). Durable queues are
    out of scope; a caller who needs them layers their own store in front.
@@ -351,32 +378,33 @@ begins is not specified ([D-070](./decisions.md#d-070-shutdown-is-either-drain-o
 
 ## Distributed mode
 
-By default Limitee is in-process and in-memory. Enabling the optional distributed
-tracker makes *everything* coordinated — `RateController` concurrency,
-`ParallelWorkers` counts, and the accumulators
-([D-081](./decisions.md#d-081-enabling-redis-coordinates-every-utility)).
-
-The architectural commitment is that coordination is **advisory, never
-load-bearing for availability**: a Redis outage degrades accuracy, never
-liveness.
+By default Limitful is in-process and in-memory. A compatible utility opts into
+cross-instance coordination by receiving a backend-neutral
+[`SynchronizationProvider`](./utilities/synchronization-provider.md). The utility
+declares required capabilities and fails configuration when the provider cannot
+satisfy them. Coordination is per configured utility, not silently process-wide
+([D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration),
+[D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)).
 
 ```mermaid
 flowchart LR
   subgraph P1["Process A"]
-    RCA["RateController"] --> TA["Tracker"]
+    RCA["RateController"] --> SPA["SynchronizationProvider"]
   end
   subgraph P2["Process B"]
-    RCB["RateController"] --> TB["Tracker"]
+    RCB["RateController"] --> SPB["SynchronizationProvider"]
   end
-  TA --> ADP1["User adapter"] --> REDIS[("Redis cluster")]
-  TB --> ADP2["User adapter"] --> REDIS
-  REDIS -->|"set cardinality, sampled about once per minute"| TA
-  REDIS -->|"set cardinality, sampled about once per minute"| TB
+  SPA --> BACKEND[("Concrete coordination backend")]
+  SPB --> BACKEND
 ```
 
-Details — set-based counting, the liveness protocol, fail-open behavior, frozen
-membership, and cluster key slotting — live in
-[redis-coordination.md](./subsystems/redis-coordination.md).
+The neutral semantic operations, capabilities, idempotency, and degradation
+signals live in
+[synchronization-provider.md](./utilities/synchronization-provider.md). Redis
+sets, scripts, liveness, divided-allocation fail-open behavior, and cluster key
+slotting live in the concrete
+[RedisSynchronizationProvider](./subsystems/redis-coordination.md) deep dive
+([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ## Observability seams
 
@@ -391,7 +419,7 @@ knowing it exists:
 - **Snapshots** — immutable, point-in-time reads of queue depth, in-flight count,
   worker count, and rate statistics.
 - **Spans** — the optional package injects a few library-stage spans (admission
-  wait, batch size, which batch) so slowness can be attributed to Limitee rather
+  wait, batch size, which batch) so slowness can be attributed to Limitful rather
   than to user code, while the user's own spans still dominate the trace.
 
 See [observability.md](./subsystems/observability.md).
@@ -440,5 +468,4 @@ utility-level items, is in [decisions.md § Unresolved](./decisions.md#unresolve
 | Shared-capacity normalization and integer-remainder algorithm | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md) |
 | Non-frozen membership policy during a Redis outage | [redis-coordination.md](./subsystems/redis-coordination.md) |
 | Whether the membership set and last-seen key share a hash tag | [redis-coordination.md](./subsystems/redis-coordination.md) |
-| Whether a separate per-second rate limiter utility exists at all | [rate-controller.md](./utilities/rate-controller.md) |
-| Library name: `Limitee` is the recorded decision; this repository directory is `Limitful` | [decisions.md](./decisions.md#d-107-working-name-is-limitee) |
+| Build order for the accepted-but-unbuilt features | [D-160](./decisions.md#d-160-roadmap-order-keyed-registry-then-shared-job-options-then-supervision-then-outcome-classification) |

@@ -4,7 +4,7 @@
 explicit attempt budget, a delay policy, and an optional predicate — with full
 visibility into every attempt.
 
-`RetryDecorator` depends on no other Limitee utility. It composes *around* them.
+`RetryDecorator` depends on no other Limitful utility. It composes *around* them.
 
 - [Scope](#scope)
 - [Attempts, not retries](#attempts-not-retries)

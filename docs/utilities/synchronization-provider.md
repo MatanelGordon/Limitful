@@ -6,7 +6,8 @@ one storage or messaging technology.
 
 `SynchronizationProvider` is the neutral distributed boundary. Controllers use
 its semantic operations; they never receive a database/cache client, issue raw
-commands, or name a particular backend in their own API.
+commands, or name a particular backend in their own API
+([D-163](../decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)).
 
 Concrete implementations may live in separate packages or a separate library:
 
@@ -15,6 +16,10 @@ Concrete implementations may live in separate packages or a separate library:
 - future providers for other coordination systems.
 
 All implementations must satisfy the same observable synchronization contract.
+The Redis implementation's keys, scripts, liveness protocol, and outage mechanics
+are specified separately in
+[`redis-coordination.md`](../subsystems/redis-coordination.md)
+([D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ## Scope
 
@@ -61,6 +66,71 @@ Core concepts:
 The contract is semantic rather than a generic key/value or command interface.
 Provider-specific transactions, scripts, locks, notifications, and storage layout
 are implementation details.
+
+## Capability declaration
+
+A provider **declares** what it supports; a controller **requires** what it needs;
+configuration **fails** when the two do not match
+([D-150](../decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)).
+
+This is the mechanism that keeps "capability-based" from being an aspiration. A
+controller asking for a strict distributed ceiling must be rejected by a provider
+that cannot claim atomically, rather than silently given a weaker guarantee it
+will go on describing as hard.
+
+| Capability | Means the provider can | Without it |
+| --- | --- | --- |
+| **Atomic claim** | Check a limit and commit a claim in one indivisible operation | No strict shared ceiling is possible — only advisory counting |
+| **Leases and TTL** | Grant time-bounded ownership that expires without the owner | A crashed instance leaks capacity until manual intervention |
+| **Membership** | Enumerate live instances in a scope | `N` cannot be divided across instances |
+| **Idempotent identity sets** | Add, remove, and count stable IDs idempotently | Retries and uncertain outcomes double-count ([INV-11](../architecture.md#invariants)) |
+| **Authoritative coordination time** | Supply non-decreasing coordination time | Cross-instance pacing is impossible; monotonic clocks are incomparable across machines |
+| **Configuration epoch** | Version shared configuration atomically | A stale instance may raise its limit on obsolete configuration |
+| **Health and degradation signal** | Report availability, uncertainty, and recovery | The controller cannot tell "coordinated" from "guessing" |
+
+### Requirement matrix
+
+Each utility declares a **required** set and an **optional** set. Required means
+configuration fails without it.
+
+| Utility | Required | Optional |
+| --- | --- | --- |
+| `RateController`, strict shared ceiling | Atomic claim · leases/TTL · idempotent identity sets · health | Membership · epoch |
+| `RateController`, divided-allowance mode | Membership · idempotent identity sets · health | Leases/TTL · epoch |
+| `ThroughputController` | Atomic claim · **authoritative coordination time** · idempotent identity sets · epoch · health | Leases/TTL for local credit leases |
+| `ParallelWorkers` | Membership · idempotent identity sets · leases/TTL · health | Epoch |
+| `GroupedRateController` | Atomic claim **spanning group and global limits in one operation** · idempotent identity sets · health | Membership · epoch |
+| `KeyedControllerRegistry` | Whatever its per-key controller requires, per scope | Membership for key-count visibility |
+
+Two entries carry the real weight. `ThroughputController` cannot be coordinated at
+all without authoritative coordination time — a provider offering only atomic
+claims is insufficient, because pacing is a statement about *when*.
+`GroupedRateController` needs a claim that checks both limits **together**;
+independent local group counters cannot provide that guarantee, so a provider
+offering only single-limit claims must be rejected for grouped use even though it
+would serve a plain `RateController` perfectly well.
+
+### Rules
+
+1. **Declaration is explicit and machine-checkable**, not documentation. A
+   provider states its capability set; it is not inferred from its backend name.
+2. **Mismatch fails at configuration time**, loudly, naming the missing capability
+   and the utility that required it — never at the first contended claim.
+3. **Partial support is no support.** A capability that holds only under some
+   conditions is not declared. "Atomic except during failover" is not atomic.
+4. **A provider must never emulate a strict guarantee** with eventual local
+   guesses in order to satisfy a requirement it cannot meet.
+5. **Capabilities are per scope, not per connection.** The same provider may be
+   sufficient for one utility and insufficient for another in the same process.
+6. **Degraded operation is not a capability downgrade.** Losing health mid-flight
+   moves the controller to its configured degraded policy
+   ([below](#failure-and-degraded-mode)); it does not retroactively re-approve a
+   configuration that was rejected.
+
+The practical payoff is the example that motivates this: a PostgreSQL provider
+that cannot express the grouped atomic claim is **rejected at startup** for a
+grouped controller, instead of quietly degrading a tenant-isolation guarantee that
+an operator believes is enforced.
 
 ## Idempotency is mandatory
 
@@ -156,6 +226,13 @@ The provider must expose enough state to make that choice honest:
 - recovery reconciles epochs, leases, and stale membership before capacity is
   raised.
 
+The Redis provider's historical fail-open divided-allocation behavior is one
+concrete degraded policy, not the generic contract. It applies only where the
+utility already owns a finite local share; it does not grant
+`ThroughputController` or another atomic-claim consumer permission to recreate a
+global balance locally
+([D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
+
 ## Packaging and portability
 
 The neutral interface belongs with the Limitful contracts so every native
@@ -165,10 +242,23 @@ dependency-free. Each target language receives an idiomatic provider interface,
 but the capability names, failure categories, idempotency rules, and observable
 state transitions remain common.
 
+## Test coverage
+
+Case IDs `SP-xxx` in
+[testing.md § SynchronizationProvider](../testing.md#synchronizationprovider-sp)
+exercise the neutral capability, idempotency, failure, and recovery contract.
+Redis-specific representation and cluster behavior remain `RDS-xxx` cases in
+[testing.md § RedisSynchronizationProvider](../testing.md#redissynchronizationprovider-rds).
+
 ## Open design questions
 
-1. Which capabilities are required for each utility versus offered as optional
-   provider extensions?
+1. ~~Which capabilities are required for each utility versus offered as optional
+   provider extensions?~~ **Resolved** by the
+   [requirement matrix](#requirement-matrix)
+   ([D-150](../decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)).
+   Still open: whether a capability can be declared at a *level* — for example
+   "atomic claim, single limit only" versus "atomic claim, multi-limit" — rather
+   than as a boolean.
 2. Is one provider instance allowed to coordinate several scopes atomically, and
    how are multi-scope reservations ordered?
 3. What exact degraded-mode defaults apply to each utility?

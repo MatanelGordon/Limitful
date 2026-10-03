@@ -1,6 +1,6 @@
 # Design Principles
 
-Limitee has one organizing rule: **the easy thing must be easy, and the hard
+Limitful has one organizing rule: **the easy thing must be easy, and the hard
 thing must be possible without forking the library.** Everything below is a
 consequence of that rule.
 
@@ -68,7 +68,7 @@ A default that is friendly but unsafe is the wrong default.
 
 ## Policy versus mechanism
 
-Limitee ships **mechanism**. Every decision that depends on the caller's domain
+Limitful ships **mechanism**. Every decision that depends on the caller's domain
 is **policy**, and policy is injected.
 
 | Mechanism — the library owns it | Policy — the caller owns it |
@@ -121,7 +121,7 @@ domain. Otherwise pick the default. Seams are API surface forever.
 
 ## Functional conventions
 
-Limitee uses objects where a lifetime must be owned and disposed, and functions
+Limitful uses objects where a lifetime must be owned and disposed, and functions
 everywhere else
 ([D-104](./decisions.md#d-104-prefer-functions-and-events-over-object-orientation)).
 
@@ -251,7 +251,7 @@ lock and never escapes.
 | Holding a slot through backoff | Converts a retry storm into a deadlock ([INV-6](./architecture.md#invariants)). |
 | Reviving a dead worker | Keeps the worker state machine honest ([INV-8](./architecture.md#invariants)). |
 | `INCR`/`DECR` for distributed counting | Not idempotent under retry ([INV-11](./architecture.md#invariants)). |
-| A hard Redis dependency | An outage must degrade accuracy, not availability ([D-083](./decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation)). |
+| A backend client in controller APIs | Controllers depend on `SynchronizationProvider` capabilities; concrete clients stay inside provider packages ([D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)). |
 | An OTel or logging dependency in core | Core carries zero observability dependencies ([D-091](./decisions.md#d-091-otel-is-a-separate-opt-in-package-per-language)). |
 | `sleep` in a test | Non-deterministic and slow. Inject the clock ([testing.md](./testing.md#deterministic-time)). |
 | Divergent semantics "because the language is different" | Only surfaces differ ([INV-13](./architecture.md#invariants)). |

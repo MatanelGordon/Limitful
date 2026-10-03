@@ -102,7 +102,56 @@ disappears. It is never cancelled mid-work.
 the error event and the worker continues looping
 ([INV-12](../architecture.md#invariants)). The user can react to error events by
 changing the worker count — including retiring workers — since errors are exported
-as events.
+as events. What happens to the *worker* after a failure is a supervision
+decision — see below.
+
+## Supervision
+
+A failing **task** is isolated ([INV-12](../architecture.md#invariants)). A failing
+**worker loop** is different: if a worker dies and is not replaced, throughput
+silently drops and stays dropped. One poisoned worker function must not leave a
+controller permanently at half capacity
+([D-130](../decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)).
+
+Supervision is therefore an **explicit enumerated policy**, not an open question,
+and every outcome emits a worker-failure event carrying the error, the worker
+identity, and the policy applied.
+
+| Policy | Behavior | Use when |
+| --- | --- | --- |
+| **Isolate** *(default)* | Surface the error; the worker keeps looping. Capacity unchanged | Task failures are expected and independent — the ordinary case |
+| **Replace** | Retire this worker and start a **fresh** one. Capacity restored, never resurrected ([INV-8](../architecture.md#invariants)) | The loop may be corrupted but the workload is sound |
+| **Reduce capacity** | Retire this worker without replacement, down to the minimum worker bound | Failures indicate the pool is too large for what the dependency can take |
+| **Stop controller** | Drain every worker and move the owner to shutdown | A failure means the whole component is unsafe to keep running |
+
+Rules that bind every policy:
+
+1. **Replacement is creation, never revival.** A dead worker is never restarted;
+   `Replace` starts a new worker with a new identity
+   ([D-022](../decisions.md#d-022-workers-drain-gracefully-and-are-never-revived)).
+2. **Retirement is always graceful.** Even under `Stop controller`, a worker stops
+   reading and finishes its current task; supervision never cancels mid-task.
+3. **Replacement is rate-limited.** A worker function failing instantly on every
+   iteration must not become a create/destroy spin. Replacement obeys the
+   scaling delta and a backoff between replacements of the same pool.
+4. **A failure event is always emitted**, including under `Isolate`, so silent
+   capacity loss is impossible by construction.
+5. **`Reduce capacity` never goes below the configured minimum**, and the
+   reduction is visible in the worker-count-change event.
+6. **A supervision callback may select the policy per failure**, receiving the
+   error and recent failure history. The enum is the simple path; the callback is
+   the advanced one.
+
+Supervision answers "what happens to the worker", while
+[outcome classification](./adaptive-capacity-policy.md#outcome-classification)
+answers "what does this failure mean for capacity". They are deliberately
+separate: a downstream `429` should reduce *throughput* without retiring a
+worker, and a crashing worker loop should be replaced even when the downstream
+service is perfectly healthy.
+
+The operational lessons here are borrowed from Go worker pools such as
+[ants](https://github.com/panjf2000/ants) — tunable sizing, non-blocking pool
+behavior, and never silently leaking workers — not their API shape.
 
 ## Sampling and scaling
 
@@ -149,7 +198,8 @@ sampler divides a fixed budget; it never enlarges it.
 | Sampling function | A fixed count | Absent a sampler, the count does not change |
 | Sampling interval | `Undecided` | Required once a sampler is supplied |
 | Scaling delta | 1 per sample | ([D-021](../decisions.md#d-021-worker-count-changes-by-one-per-sample-by-default)) |
-| Worker failure policy | Isolate and continue | ([INV-12](../architecture.md#invariants)) |
+| Worker failure policy | `Isolate` | Four enumerated policies plus an optional callback ([D-130](../decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)) |
+| Replacement backoff | `Undecided` | Required so a permanently failing worker cannot spin. Surfaced during consolidation |
 | Clock | System clock | Injectable ([D-103](../decisions.md#d-103-the-clock-is-public-api)) |
 | Synchronization provider | None | In-process by default; opt in for cross-instance membership/allocation ([SynchronizationProvider](./synchronization-provider.md)) |
 
@@ -161,7 +211,7 @@ sampler divides a fixed budget; it never enlarges it.
 | Sampling interval | duration | Evaluation frequency |
 | Max scaling delta | number | More than one change per interval |
 | Min / max workers | numbers | Hard bounds around the sampled value |
-| Worker failure policy | option or callback | Isolate and continue, or retire the worker |
+| Worker failure policy | enum or callback | `Isolate`, `Replace`, `Reduce capacity`, or `Stop controller` ([supervision](#supervision)) |
 | Event handlers | callbacks | `OnWorkerStart`, `OnWorkerStop`, `OnWorkerError`, `OnTaskComplete`, worker-count change |
 | Clock / scheduler | injected | Deterministic sampling in tests |
 | Synchronization provider | injected | Coordinated membership and worker allocation across instances ([SynchronizationProvider](./synchronization-provider.md#parallelworkers)) |
@@ -213,6 +263,11 @@ only consume work already released by the throughput credit scheduler.
 - Worker-count changes per sample never exceed the scaling delta.
 - A failing task never stops a worker's loop unless the failure policy says so
   ([INV-12](../architecture.md#invariants)).
+- **Capacity is never silently lost.** Every worker failure emits an event, and a
+  worker that disappears either reduces the reported count or is replaced by a
+  fresh worker ([D-130](../decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)).
+- Replacement never exceeds the scaling delta, and never produces a
+  create/destroy spin.
 
 ## Events and metrics
 
@@ -232,5 +287,7 @@ Case IDs `PW-xxx` in [testing.md § ParallelWorkers](../testing.md#parallelworke
 | Default min and max worker counts | Not decided. Surfaced during consolidation |
 | Default sampling interval | Not decided. Surfaced during consolidation |
 | Whether the sampler may run concurrently with a resize still settling, and whether sampling is skipped while a drain is in progress | Not decided. Surfaced during consolidation |
-| Whether the worker failure policy is an enum, a callback, or both | Not decided. Surfaced during consolidation |
+| ~~Whether the worker failure policy is an enum, a callback, or both~~ | **Resolved:** both — an enum of four policies plus an optional per-failure callback ([D-130](../decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)) |
+| Replacement backoff default, and whether repeated replacement failures escalate to `Stop controller` automatically | Not decided. Surfaced during consolidation |
+| Whether `Stop controller` is available when `ParallelWorkers` is used standalone, with no owning controller | Not decided. Surfaced during consolidation |
 | Ownership of the first-item accumulation window when several batching workers are idle | Not decided ([async-accumulator.md](./async-accumulator.md#open-items)) |

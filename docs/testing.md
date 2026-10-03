@@ -72,7 +72,7 @@ Known technical-test areas:
 | The weighted admission lock | All, but especially C# | Peek → check → commit → remove must be synchronized per language's concurrency model ([weighted-async-accumulator.md § Thread safety](./utilities/weighted-async-accumulator.md#thread-safety)) |
 | Achievable parallelism | Python, JavaScript | A single-threaded runtime cannot parallelize CPU work. **Semantics stay identical; only achievable concurrency differs** |
 | Batch-outcome surface | C# especially | The ergonomic shape differs; the contract does not ([D-042](./decisions.md#d-042-outcome-correlation-is-positional-by-default-keyed-is-advanced)) |
-| Redis client integration | All | The adapter is user-supplied ([D-085](./decisions.md#d-085-redis-access-goes-through-a-user-supplied-adapter)) |
+| Concrete provider client integration | All | Backend adapters are provider-specific; controllers see only `SynchronizationProvider` ([D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)) |
 
 ## Case IDs and traceability
 
@@ -82,6 +82,12 @@ Every business test case has a **stable ID**: a component prefix plus a number
 | Prefix | Component |
 | --- | --- |
 | `RC` | [RateController](./utilities/rate-controller.md) |
+| `TC` | [ThroughputController](./utilities/throughput-controller.md) |
+| `JO` | [Shared controller contract](./subsystems/controller-contract.md) |
+| `KCR` | [KeyedControllerRegistry](./utilities/keyed-controller-registry-draft.md) |
+| `AC` | [AdaptiveCapacityPolicy](./utilities/adaptive-capacity-policy.md) |
+| `SP` | [SynchronizationProvider](./utilities/synchronization-provider.md) |
+| `PB` | [Probe](./utilities/probe.md) |
 | `GRC` | [GroupedRateController](./utilities/grouped-rate-controller.md) |
 | `PW` | [ParallelWorkers](./utilities/parallel-workers.md) |
 | `AA` | [AsyncAccumulator](./utilities/async-accumulator.md) |
@@ -127,7 +133,8 @@ If a test needs a seam that does not exist for users, the seam is wrong.
 | **Counting weight function** | The user weight function | That weight is computed exactly once, at insertion ([D-052](./decisions.md#d-052-item-weight-is-computed-once-at-insertion)) |
 | **Scripted retry predicate** | `shouldRetry` | Which failures retry, and that cancellation ignores the predicate |
 | **Gated job function** | The user function | Holding jobs in flight to observe ceiling enforcement |
-| **In-memory fake Redis adapter** | The Redis adapter ([D-085](./decisions.md#d-085-redis-access-goes-through-a-user-supplied-adapter)) | Membership, cardinality, staleness, **and induced outages** — no real Redis in the business suite |
+| **Scripted synchronization provider** | `SynchronizationProvider` | Capability matching, atomic/idempotent claims, uncertain outcomes, health transitions, and recovery |
+| **In-memory fake Redis adapter** | The `RedisSynchronizationProvider` adapter ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) | Redis sets, cardinality, staleness, scripts, slotting, **and induced outages** — no real Redis in the business suite |
 | **Event recorder** | Event handlers | Which events fired, in what order, with what payloads |
 | **Small configured limits** | Production-sized limits | Queue-full, batch-full, and over-weight paths, without volume |
 
@@ -247,6 +254,37 @@ exists ([implementation status](#implementation-status)).
 | RC-014 | Submitting after shutdown begins fails with cancellation | [INV-10](./architecture.md#invariants) | Ready |
 | RC-015 | Invalid configuration fails at construction with an actionable message | [design-principles.md](./design-principles.md#error-handling) | Ready |
 
+### ThroughputController (TC)
+
+All time cases use a virtual monotonic clock and manual scheduler.
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| TC-001 | The first cost-one job starts immediately and anchors the first fixed window | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — simple pacing model and window anchor are not decided |
+| TC-002 | A fixed window grants at most its configured credits; excess queued cost waits for the next boundary | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — fixed-window default is not decided |
+| TC-003 | Unused fixed-window credits expire at the boundary and do not enlarge the next window | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — fixed-window default is not decided |
+| TC-004 | Smooth pacing and minimum start spacing are disabled by default | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — simple pacing default is not decided |
+| TC-005 | Omitted job cost is `1`; an explicit positive cost is evaluated once at submission | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
+| TC-006 | Launch commit spends a job's cost exactly once; completion, failure, and post-launch cancellation do not refund it | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
+| TC-007 | A non-positive, non-finite, or unsupported job cost fails with actionable validation | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
+| TC-008 | A cost greater than the maximum quota balance fails at submission and never enters the queue | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
+| TC-009 | With smooth pacing enabled, cost `C` advances eligibility by `C × period / rate` using conservative rounding | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — weighted pacing and rounding are not decided |
+| TC-010 | A late scheduler wake-up never authorizes an early start or creates a catch-up burst | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — smooth pacing semantics are not decided |
+| TC-011 | Configured minimum start spacing independently gates the next launch | [throughput-controller.md](./utilities/throughput-controller.md#optional-minimum-spacing-and-smooth-pacing) | Ready |
+| TC-012 | Refill adds its amount lazily at each elapsed interval and never raises balance above capacity | [throughput-controller.md](./utilities/throughput-controller.md#quota-and-reservoir-behavior) | Ready |
+| TC-013 | Reset replaces the balance at its boundary and discards unused prior balance | [throughput-controller.md](./utilities/throughput-controller.md#quota-and-reservoir-behavior) | Ready |
+| TC-014 | Cancellation before launch commit wins without spending cost; a committed launch spends once and resolves once | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready — minimum atomic result; exact simultaneous race ordering remains blocked |
+| TC-015 | Queue-wait expiry removes the job permanently and spends no credit | [INV-7](./architecture.md#invariants) | Ready |
+| TC-016 | Priority changes selection order only and never bypasses pacing, spacing, quota, cancellation, or deadlines | [D-112](./decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging) | Ready |
+| TC-017 | Increasing the live rate creates no retroactive credit or replay of missed pacing ticks | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — pacing and live-update semantics are not decided |
+| TC-018 | Reducing quota capacity clamps available balance, revokes no committed start, and evicts no queued work | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — live-update effects are not decided |
+| TC-019 | One controller keeps at most one scheduler wake-up armed for the earliest eligibility while jobs queue | [D-166](./decisions.md#d-166-throughputcontroller-uses-one-bounded-event-driven-scheduler) | Ready |
+| TC-020 | User functions, policies, and event handlers execute outside the scheduler lock and may re-enter read-only APIs | [D-166](./decisions.md#d-166-throughputcontroller-uses-one-bounded-event-driven-scheduler) | Ready |
+| TC-021 | Drain rejects new work but continues honoring pacing and quota until every valid queued job settles | [D-166](./decisions.md#d-166-throughputcontroller-uses-one-bounded-event-driven-scheduler) | Ready |
+| TC-022 | Cancel-pending announces cancellation for every queued job, spends no credit for them, and lets committed work finish | [D-166](./decisions.md#d-166-throughputcontroller-uses-one-bounded-event-driven-scheduler) | Ready |
+| TC-023 | Without a composed concurrency controller, several slow jobs may remain in flight after their starts were validly admitted | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
+| TC-024 | Submitting after shutdown begins fails immediately and schedules no wake-up | [INV-10](./architecture.md#invariants) | Ready |
+
 ### GroupedRateController (GRC)
 
 | ID | Case | Source | Status |
@@ -265,6 +303,9 @@ exists ([implementation status](#implementation-status)).
 | GRC-012 | Groups cannot be added or changed at runtime | [D-060](./decisions.md#d-060-groups-are-static) | Ready |
 | GRC-013 | Caller-assigned group priority overrides fair rotation | [D-063](./decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced) | **Blocked** — algorithm undefined |
 | GRC-014 | Shared allocation is normalized against contending-group count and slot count, including remainders | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | **Blocked** — algorithm undefined |
+| GRC-015 | A reserved share guarantees its group a minimum of the shared ceiling whenever it has demand | [D-132](./decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope) | **Blocked** — deferred |
+| GRC-016 | Unused reserved capacity is reclaimable by other groups and surrendered when demand returns | [D-132](./decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope) | **Blocked** — deferred |
+| GRC-017 | Reserved shares summing above the shared ceiling fail at construction | [D-132](./decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope) | **Blocked** — deferred |
 
 ### ParallelWorkers (PW)
 
@@ -286,6 +327,16 @@ exists ([implementation status](#implementation-status)).
 | PW-014 | No worker is started before first use | [design-principles.md](./design-principles.md#functional-conventions) | Ready |
 | PW-015 | Whether the sampler runs at startup or only after the first interval | [D-020](./decisions.md#d-020-worker-count-comes-from-a-user-sampling-function) | **Blocked** — not decided |
 | PW-016 | Sampler behavior while a scale change is still settling | — | **Blocked** — not decided |
+| PW-017 | `Isolate`: a throwing task surfaces an error and the worker keeps looping, with capacity unchanged | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-018 | `Replace`: the failing worker retires and a **fresh** worker with a new identity restores capacity | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-019 | `Reduce capacity`: the worker retires without replacement, never below the minimum bound | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-020 | `Stop controller`: every worker drains and the owner moves to shutdown | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-021 | A worker-failure event fires under **every** policy, including `Isolate` | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-022 | Capacity is never silently lost: a vanished worker either reduces the reported count or is replaced | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-023 | A worker function failing on every iteration does not become a create/destroy spin | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-024 | Supervised retirement is still graceful: the current task finishes, even under `Stop controller` | [D-022](./decisions.md#d-022-workers-drain-gracefully-and-are-never-revived) | Ready |
+| PW-025 | A supervision callback may select the policy per failure from the error and recent history | [D-130](./decisions.md#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy) | Ready |
+| PW-026 | Replacement backoff default and automatic escalation | — | **Blocked** — not decided |
 
 ### AsyncAccumulator (AA)
 
@@ -317,6 +368,13 @@ exists ([implementation status](#implementation-status)).
 | AA-024 | Whole-batch-function timeout, if one exists | [D-035](./decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage) | **Blocked** — not decided |
 | AA-025 | Behavior when the batch function ignores the cancellation signal | — | **Blocked** — not decided |
 | AA-026 | First-item window ownership when several batching workers are idle | [D-047](./decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle) | **Blocked** — not decided |
+| AA-027 | Manual flush closes the current batch immediately, without waiting out the window | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
+| AA-028 | Awaiting a manual flush awaits the batch outcomes, so it works as a barrier | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
+| AA-029 | Manual flush with more than `maxBatchSize` queued produces full batches plus one partial, never an oversized batch | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
+| AA-030 | Flushing an empty accumulator succeeds and invokes no batch function | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
+| AA-031 | Two concurrent flush requests coalesce to one batch boundary | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
+| AA-032 | Manual flush does not bypass a composed controller's admission | [D-041](./decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller) | Ready |
+| AA-033 | After a manual flush the window does not restart until the next item arrives | [D-047](./decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle) | Ready |
 
 ### WeightedAsyncAccumulator (WAA)
 
@@ -402,11 +460,36 @@ Every queue-owning utility must pass this suite against its own surface.
 | LC-004 | Both modes refuse new enqueues immediately with cancellation | [D-071](./decisions.md#d-071-enqueues-stop-immediately-once-shutdown-begins) | Ready |
 | LC-005 | Disposal returns only after every worker has drained to dead | [D-022](./decisions.md#d-022-workers-drain-gracefully-and-are-never-revived) | Ready |
 | LC-006 | No worker is cancelled mid-task by either shutdown mode | [D-022](./decisions.md#d-022-workers-drain-gracefully-and-are-never-revived) | Ready |
-| LC-007 | With coordination enabled, disposal removes distributed membership before completing | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
+| LC-007 | With coordination enabled, disposal releases provider claims and removes membership before completing | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
 | LC-008 | Whether disposal is idempotent, and what a second disposal does | — | **Blocked** — not decided |
 | LC-009 | Durable persistence across process exit | [D-072](./decisions.md#d-072-job-persistence-across-restarts-is-out-of-scope) | Not applicable — out of scope by decision |
 
-### Redis coordination (RDS)
+### SynchronizationProvider (SP)
+
+These cases use a scripted backend-neutral provider; they do not assert any
+Redis command or storage layout.
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| SP-001 | With no provider configured, a utility remains in-process and makes no synchronization call | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-002 | Coordination is enabled only for the utility receiving a provider; another utility in the same process remains local | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-003 | Missing a required capability fails configuration before work is accepted and names the utility and capability | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
+| SP-004 | Capabilities are taken from the explicit declaration, never inferred from a provider or backend name | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
+| SP-005 | A capability declared only for some conditions is rejected as unsupported for a strict requirement | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
+| SP-006 | Repeating a membership or claim add with the same stable identity creates one authoritative entry | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-007 | Repeating release/removal for the same identity is harmless and cannot release another owner's state | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-008 | Retrying an uncertain reservation with the same idempotency ID returns the original grant or denial and spends once | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-009 | Two distinct scopes do not share claims, membership, limits, or configuration epochs | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-010 | Healthy, degraded/uncertain, and recovered transitions are observable without backend-specific fields | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-011 | A degraded local approximation is identified as degraded and is never reported as a hard global guarantee | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
+| SP-012 | Recovery reconciles configuration epoch, leases, and stale membership before allowing capacity to increase | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-013 | `ThroughputController` rejects a provider lacking authoritative coordination time | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
+| SP-014 | `GroupedRateController` rejects a provider that can claim one limit atomically but cannot claim group and global limits together | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
+| SP-015 | A stale configuration epoch may preserve a stricter allowance but never raises capacity from obsolete configuration | [synchronization-provider.md](./utilities/synchronization-provider.md#throughputcontroller) | Ready |
+| SP-016 | Provider operations carry permission/shared state only; executable payloads and callbacks never cross the boundary | [D-161](./decisions.md#d-161-explicitly-out-of-scope) | Ready |
+| SP-017 | Controller construction and operation use semantic provider operations and expose no backend client or raw command surface | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+
+### RedisSynchronizationProvider (RDS)
 
 All cases run against the in-memory fake adapter with an injected clock.
 
@@ -417,16 +500,16 @@ All cases run against the in-memory fake adapter with an injected clock.
 | RDS-003 | A repeated remove of the same ID is idempotent | [INV-11](./architecture.md#invariants) | Ready |
 | RDS-004 | No increment or decrement command is ever issued | [D-082](./decisions.md#d-082-distributed-counting-is-set-based-never-increment-or-decrement) | Ready |
 | RDS-005 | An entity only removes its own ID, except via staleness-based disqualification | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
-| RDS-006 | Two coordinated processes divide `N`; their local allowances do not sum above `N` | [D-081](./decisions.md#d-081-enabling-redis-coordinates-every-utility) | Ready |
+| RDS-006 | Two Redis-provider consumers in divided-allocation mode divide `N`; their healthy local allowances do not sum above `N` | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | RDS-007 | The heartbeat refreshes last-seen on the configured interval | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
 | RDS-008 | Any peer can disqualify a member whose last-seen has gone stale; the count drops | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
 | RDS-009 | Clean shutdown removes the process's own members | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
-| RDS-010 | While the adapter is failing, the process keeps admitting and executing work | [D-083](./decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation) | Ready |
-| RDS-011 | During an outage, the last sampled count is used to divide the allowance locally | [D-083](./decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation) | Ready |
+| RDS-010 | While the adapter is failing, a configured divided-allocation consumer keeps using only its finite degraded local share | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
+| RDS-011 | During that outage, the last sampled count is used to divide the allowance locally and degradation is observable | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | RDS-012 | Frozen membership: a newly appearing worker adds no capacity while degraded | [D-084](./decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined) | Ready |
 | RDS-013 | Frozen membership: a removal may reduce the allocation and never increases it again while degraded | [D-084](./decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined) | Ready |
-| RDS-014 | On recovery, sampling resumes and the allocation re-normalizes | [D-083](./decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation) | Ready |
-| RDS-015 | Overshoot during an outage is bounded by membership drift, not unbounded | [D-083](./decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation) | Ready |
+| RDS-014 | On recovery, sampling and reconciliation complete before the allocation re-normalizes upward | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
+| RDS-015 | Divided-allocation overshoot during an outage is bounded by membership drift, not unbounded | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | RDS-016 | Every key carries the configured prefix | [D-087](./decisions.md#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix) | Ready |
 | RDS-017 | Single-key operations impose no hash tag; multi-key operations use co-located keys | [D-087](./decisions.md#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix) | Ready for single-key; **Blocked** for the liveness-scan pairing |
 | RDS-018 | Non-frozen membership behavior during an outage | [D-084](./decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined) | **Blocked** — not decided |
@@ -446,6 +529,133 @@ All cases run against the in-memory fake adapter with an injected clock.
 | OB-008 | Every announced non-execution — timeout, cancellation, shutdown cancellation — is observable through events | [INV-2](./architecture.md#invariants) | Ready |
 | OB-009 | The core package declares no observability dependency | [D-091](./decisions.md#d-091-otel-is-a-separate-opt-in-package-per-language) | Ready |
 | OB-010 | Exact event payload shapes, delivery synchronicity, and ordering guarantees | — | **Blocked** — not decided |
+
+### Shared controller contract (JO)
+
+Every `JO` case runs against **both** `RateController` and `ThroughputController`.
+Divergence in a shared case is a contract bug, not a per-controller detail
+([D-110](./decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)).
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| JO-001 | Function-only submission works with no `JobOptions` at all | [D-111](./decisions.md#d-111-joboptions-is-one-shared-envelope-with-per-controller-cost-semantics) | Ready |
+| JO-002 | Every `JobOptions` field is independently optional | [D-111](./decisions.md#d-111-joboptions-is-one-shared-envelope-with-per-controller-cost-semantics) | Ready |
+| JO-003 | A supplied `id` appears in events and snapshots and is not treated as a deduplication key | [D-111](./decisions.md#d-111-joboptions-is-one-shared-envelope-with-per-controller-cost-semantics) | Ready |
+| JO-004 | An absent `id` is generated internally and is still correlatable | [D-111](./decisions.md#d-111-joboptions-is-one-shared-envelope-with-per-controller-cost-semantics) | Ready |
+| JO-005 | `cost`, `priority`, and `deadline` are evaluated exactly once, at submission | [D-111](./decisions.md#d-111-joboptions-is-one-shared-envelope-with-per-controller-cost-semantics) | Ready |
+| JO-006 | Zero, negative, non-finite, and out-of-range `cost` fail at submission | [D-111](./decisions.md#d-111-joboptions-is-one-shared-envelope-with-per-controller-cost-semantics) | Ready |
+| JO-007 | A `cost` that can never be satisfiable fails at submission rather than queueing | [D-115](./decisions.md#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy) | Ready |
+| JO-008 | `RateController` rejects a supplied `cost` with a clear error — it is never silently ignored | [D-116](./decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred) | Ready |
+| JO-009 | Priority changes selection order only; it never exceeds a ceiling, pace, or quota | [D-112](./decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging) | Ready |
+| JO-010 | Equal-priority work is served FIFO within its band | [D-112](./decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging) | Ready |
+| JO-011 | With priority enabled, a sustained high-priority stream does not starve lower-priority work under the default policy | [D-112](./decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging) | Ready |
+| JO-012 | Priority never makes cancellation non-terminal | [INV-5](./architecture.md#invariants) | Ready |
+| JO-013 | `canStartNow` returns true when capacity is immediately available, false when saturated | [D-113](./decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity) | Ready |
+| JO-014 | `canStartNow` reserves nothing: two concurrent callers may both be told yes, and the ceiling still holds | [D-113](./decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity) | Ready |
+| JO-015 | Advisory queries never block and never mutate observable state | [D-113](./decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity) | Ready |
+| JO-016 | `ThroughputController.estimatedStartAt` returns a **computed** eligibility matching the pacing schedule under a virtual clock | [D-114](./decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent) | Ready |
+| JO-017 | `RateController.estimatedStartAt` returns absence, or a value explicitly marked statistical — never a fabricated number | [D-114](./decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent) | Ready |
+| JO-018 | A deadline that cannot be met is rejected at submission by `ThroughputController`, provably | [D-115](./decisions.md#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy) | Ready |
+| JO-019 | `RateController` does not reject at submission on a statistical estimate; the job is accepted and its deadline expires in the queue | [D-115](./decisions.md#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy) | Ready |
+| JO-020 | A deadline is re-checked before launch commit, and an expired job never starts | [D-036](./decisions.md#d-036-a-queue-wait-timeout-removes-the-item-permanently) | Ready |
+| JO-021 | Every submission yields exactly one terminal outcome, including announced admission failures | [INV-2](./architecture.md#invariants) | Ready |
+| JO-022 | Fire-and-forget uses the same scheduling path as an awaited submission | [D-110](./decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries) | Ready |
+| JO-023 | `cost` and `priority` numeric range, overflow, and rounding are identical in every binding | [INV-13](./architecture.md#invariants) | Ready |
+| JO-024 | Number of priority bands and the default aging or weighted-fair algorithm | [D-112](./decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging) | **Blocked** — not decided |
+| JO-025 | Weighted concurrency cost on `RateController`, once a starvation rule exists | [D-116](./decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred) | **Blocked** — deferred |
+| JO-026 | Whether retry priority is expressed as `JobOptions.priority` | [D-141](./decisions.md#d-141-one-outcome-classification-vocabulary-is-shared-with-the-retry-predicate) | **Blocked** — not decided |
+
+### KeyedControllerRegistry (KCR)
+
+Every `QA` case must also pass through a registry-wrapped controller unchanged —
+that is the proof the registry adds no admission semantics
+([D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key)).
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| KCR-001 | A first submission for a new key creates exactly one controller and runs the work | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-002 | Subsequent submissions for the same key reuse that controller | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-003 | Concurrent first submissions for the same key create exactly one controller, and all of them use it | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-004 | Different keys are isolated: saturating one key does not delay another | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-005 | The key selector runs once per submission and its result routes the work | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-006 | A throwing key selector fails that submission at submission time, before any queue | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-007 | Construction fails when `idleTimeToLive` or `maxActiveKeys` is absent | [D-121](./decisions.md#d-121-idle-ttl-and-maximum-active-keys-are-mandatory) | Ready |
+| KCR-008 | There is no "never expire" or infinite-key configuration | [D-121](./decisions.md#d-121-idle-ttl-and-maximum-active-keys-are-mandatory) | Ready |
+| KCR-009 | An idle key is evicted after `idleTimeToLive` under a virtual clock | [D-122](./decisions.md#d-122-eviction-never-discards-live-work) | Ready |
+| KCR-010 | A key with queued work is **never** evicted, however long it has been idle by wall time | [D-122](./decisions.md#d-122-eviction-never-discards-live-work) | Ready |
+| KCR-011 | A key with work in flight is never evicted | [D-122](./decisions.md#d-122-eviction-never-discards-live-work) | Ready |
+| KCR-012 | A submission arriving for an evictable key revives it rather than racing its eviction | [D-122](./decisions.md#d-122-eviction-never-discards-live-work) | Ready |
+| KCR-013 | Eviction disposes the controller; it is not abandoned to the garbage collector | [D-122](./decisions.md#d-122-eviction-never-discards-live-work) | Ready |
+| KCR-014 | At `maxActiveKeys`, a new key's submission is **rejected**, and no live key is evicted to make room | [D-123](./decisions.md#d-123-at-capacity-refusal-is-distinct-from-queue-overflow) | Ready |
+| KCR-015 | The at-capacity rejection reason is distinguishable from queue overflow | [D-123](./decisions.md#d-123-at-capacity-refusal-is-distinct-from-queue-overflow) | Ready |
+| KCR-016 | Idle keys are swept before a capacity rejection, so an evictable key yields room | [D-123](./decisions.md#d-123-at-capacity-refusal-is-distinct-from-queue-overflow) | Ready |
+| KCR-017 | Active-key count never exceeds `maxActiveKeys` under concurrent new-key pressure | [D-121](./decisions.md#d-121-idle-ttl-and-maximum-active-keys-are-mandatory) | Ready |
+| KCR-018 | With a `globalCeiling`, aggregate in-flight across all keys never exceeds it | [D-123](./decisions.md#d-123-at-capacity-refusal-is-distinct-from-queue-overflow) | Ready |
+| KCR-019 | Without a `globalCeiling`, the snapshot reports worst-case aggregate concurrency | [D-123](./decisions.md#d-123-at-capacity-refusal-is-distinct-from-queue-overflow) | Ready |
+| KCR-020 | Snapshots report active keys, high-water mark, eviction count, and refusal count | [D-124](./decisions.md#d-124-registry-disposal-propagates-and-evictions-are-observable) | Ready |
+| KCR-021 | Key created, evicted, and refused events each fire once per occurrence | [D-124](./decisions.md#d-124-registry-disposal-propagates-and-evictions-are-observable) | Ready |
+| KCR-022 | Disposal stops accepting new keys and new submissions immediately | [INV-10](./architecture.md#invariants) | Ready |
+| KCR-023 | Disposal disposes every live controller under the chosen mode and returns only when all are disposed | [D-124](./decisions.md#d-124-registry-disposal-propagates-and-evictions-are-observable) | Ready |
+| KCR-024 | No background work occurs before the first submission | [design-principles.md](./design-principles.md#functional-conventions) | Ready |
+| KCR-025 | A registry over `ThroughputController` behaves identically for all key-lifecycle cases | [D-110](./decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries) | Ready |
+| KCR-026 | The full `QA` suite passes unchanged through a registry-wrapped controller | [D-120](./decisions.md#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key) | Ready |
+| KCR-027 | Whether `globalCeiling` is mandatory | [D-123](./decisions.md#d-123-at-capacity-refusal-is-distinct-from-queue-overflow) | **Blocked** — not decided |
+| KCR-028 | Idle-TTL measurement origin: last submission versus became-empty | — | **Blocked** — not decided |
+| KCR-029 | Eviction selection among several evictable keys | — | **Blocked** — not decided |
+
+### AdaptiveCapacityPolicy (AC)
+
+Signals are supplied directly rather than measured, under an injected clock.
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| AC-001 | A controller built without naming a policy performs no adaptation at all | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-002 | `Throttled` outcomes reduce effective capacity | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-003 | `Overloaded` outcomes reduce effective capacity | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-004 | **`CallerError` outcomes have no capacity effect**, however many arrive | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-005 | `TransientFailure` is neutral by default | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-006 | `Ignore` outcomes are excluded from every adaptive input | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-007 | With no classifier supplied, raw failures alone never reduce capacity | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-008 | Cancellation is never treated as a capacity signal | [INV-5](./architecture.md#invariants) | Ready |
+| AC-009 | Classification never alters the caller's own returned outcome | [D-140](./decisions.md#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) | Ready |
+| AC-010 | A throwing classifier or policy falls back to the nominal limit and never retains an overclock | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-011 | A proposed capacity above the configured envelope is clamped | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-012 | Adaptation can never raise `RateController` in-flight work above `N` | [INV-4](./architecture.md#invariants) | Ready |
+| AC-013 | Overclock requires explicit enablement; an absolute maximum above nominal alone does not enable it | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-014 | Enter and exit thresholds are distinct, and a single busy sample does not trigger an overclock | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-015 | Overclock expires under virtual time even if no new signal arrives | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-016 | A stale or invalid signal returns capacity to nominal immediately | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-017 | Unused adaptive headroom never accumulates as a later burst | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | Ready |
+| AC-018 | Every accepted and rejected adaptation is observable with its bounded reason code | [D-090](./decisions.md#d-090-observability-is-event-driven-and-exposes-raw-data) | Ready |
+| AC-019 | Whether `Throttled` reduces capacity more aggressively than `Overloaded` | — | **Blocked** — not decided |
+| AC-020 | Default sample interval, stale threshold, dead band, dwell, hold, overclock duration, and cooldown | — | **Blocked** — not decided |
+| AC-021 | Congestion-preset behavior | [D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later) | **Blocked** — deferred |
+| AC-022 | Policy evaluation receives one immutable normalized context and returns a bounded reason code without mutating controller state | [D-167](./decisions.md#d-167-adaptivecapacitypolicy-proposes-controllers-validate-and-clamp) | Ready |
+| AC-023 | Policy evaluation runs outside scheduling locks; a policy may re-enter read-only controller APIs without deadlock | [D-167](./decisions.md#d-167-adaptivecapacitypolicy-proposes-controllers-validate-and-clamp) | Ready |
+| AC-024 | Submitting jobs does not evaluate the policy per job; evaluation occurs only at its configured interval or a pushed sample | [D-167](./decisions.md#d-167-adaptivecapacitypolicy-proposes-controllers-validate-and-clamp) | Ready |
+| AC-025 | Shutdown ends an active overclock immediately and no later policy result can raise capacity | [D-167](./decisions.md#d-167-adaptivecapacitypolicy-proposes-controllers-validate-and-clamp) | Ready |
+| AC-026 | Adaptation changes only the controller's documented effective bound; it never mints quota or bypasses another hard gate | [D-167](./decisions.md#d-167-adaptivecapacitypolicy-proposes-controllers-validate-and-clamp) | Ready |
+
+### Probe (PB)
+
+All timing and timeout cases use a virtual monotonic clock and manual scheduler.
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| PB-001 | Before the first successful refresh, `current()` returns absence and the snapshot reports no value | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-002 | Construction starts the first refresh immediately without waiting one interval | [D-169](./decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals) | Ready |
+| PB-003 | A successful refresh atomically publishes the value, success/attempt times, clears the latest failure, and increments generation once | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-004 | A failed refresh updates attempt/failure metadata but preserves the previous value, success time, and generation | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-005 | `current()` returns the last-known-good value even when the latest attempt failed or the value is stale | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-006 | `isFresh` changes exactly at the configured freshness boundary under virtual time | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-007 | A slow measurement never overlaps another invocation for the same probe | [D-169](./decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals) | Ready |
+| PB-008 | One or more intervals becoming due during an active measurement coalesce into one subsequent refresh, not one call per missed tick | [D-169](./decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals) | Ready |
+| PB-009 | By default a refresh receives cooperative timeout/cancellation when one interval elapses | [D-169](./decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals) | Ready |
+| PB-010 | Snapshot readers observe either the complete old state or complete new state, never a partial publication | [D-169](./decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals) | Ready |
+| PB-011 | The measurement function runs outside probe synchronization and may read the current snapshot without deadlock | [D-169](./decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals) | Ready |
+| PB-012 | Default `historyCapacity = 1` retains only the latest successful value | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-013 | Configured history capacity `N` retains at most the latest `N` successful values under repeated refreshes | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
+| PB-014 | A non-positive refresh interval or history capacity fails construction with an actionable message | [design-principles.md](./design-principles.md#error-handling) | Ready |
 
 ## Cross-language parity process
 

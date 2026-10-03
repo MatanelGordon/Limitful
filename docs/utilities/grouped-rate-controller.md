@@ -14,6 +14,7 @@ one shared global ceiling.
 - [Public behavior](#public-behavior)
 - [Matching and unmatched items](#matching-and-unmatched-items)
 - [Shared-ceiling scheduling](#shared-ceiling-scheduling)
+- [Reserved shares](#reserved-shares--deferred-advanced-feature)
 - [Defaults](#defaults)
 - [Advanced options](#advanced-options)
 - [Lifecycle, cancellation, and timeouts](#lifecycle-cancellation-and-timeouts)
@@ -116,6 +117,52 @@ are an advanced API option
 Two slots are required to execute: one from the group's own limit and one from the
 shared global ceiling. Both are released on completion.
 
+## Reserved shares — deferred advanced feature
+
+> **Status: deferred.** The direction is accepted; it is not part of the first
+> version ([D-132](../decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope)).
+
+Per-group limits are **maximums**. They answer "how much may this group take",
+never "how much is this group guaranteed". Under contention a group can therefore
+be squeezed to zero by the shared ceiling even while sitting below its own limit,
+because fair rotation distributes *opportunities*, not *capacity*.
+
+A **reserved share** is the missing guarantee: a minimum fraction of the shared
+ceiling that a group can always claim when it has queued work, with unused
+reservation **reclaimable** by other groups rather than idle.
+
+```text
+# Illustrative only. Guarantee checkout 20% of the global ceiling;
+# analytics may use everything nobody else is using.
+groups: [
+  { name: "checkout",  concurrency: 30, reservedShare: 0.20, matches: ... },
+  { name: "analytics", concurrency: 40,                       matches: ... },
+]
+```
+
+Required properties whenever this is built:
+
+1. **Reservations are floors, limits are ceilings.** Both bind; a group gets at
+   least its reserved share when it has demand, and never more than its own limit
+   ([D-062](../decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling)).
+2. **Unused reservation is reclaimable**, so a reserved-but-idle group costs
+   nothing. A reservation that idles capacity would be worse than priority.
+3. **Reserved shares must sum to at most the shared ceiling.** Over-subscription
+   fails at construction, not at runtime.
+4. **Reclaimed capacity is surrendered promptly** when the reserving group's
+   demand returns — bounded by in-flight completion, never by preemption, since
+   running work is never cancelled ([D-022](../decisions.md#d-022-workers-drain-gracefully-and-are-never-revived)).
+5. **It composes with, and does not replace, fair rotation.** Rotation allocates
+   what is left after reservations are satisfied
+   ([D-063](../decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced)).
+
+**Why this is stronger than priority, and why it still waits.** Priority decides
+*who goes next*; a reservation decides *how much is always available* — the
+difference between "checkout usually wins" and "checkout always has 20%". But it
+needs the shared-capacity normalization algorithm that is still undecided, and
+layering guaranteed floors on an undefined allocator would bake in whatever that
+allocator happens to do. It is sequenced after normalization deliberately.
+
 ## Defaults
 
 | Option | Default | Notes |
@@ -125,6 +172,7 @@ shared global ceiling. Both are released on completion.
 | Groups | **Required**, static | ([D-060](../decisions.md#d-060-groups-are-static)) |
 | Unmatched-item policy | Throw, unless a default group is configured | ([D-061](../decisions.md#d-061-unmatched-items-route-to-a-default-group-or-throw)) |
 | Shared-slot arbitration | Fair rotation | ([D-063](../decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced)) |
+| Reserved shares | None | Deferred; limits are maximums, not guarantees ([D-132](../decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope)) |
 | Group priorities | None | Advanced opt-in |
 | Overflow policy | `Reject` | Inherited from the queue primitive ([D-030](../decisions.md#d-030-a-full-queue-rejects-immediately-by-default)) |
 | Max queued per group | `Undecided` | Inherits the undecided default bound ([rate-controller.md § Open items](./rate-controller.md#open-items)) |
@@ -135,6 +183,7 @@ shared global ceiling. Both are released on completion.
 | Option | Shape | Effect |
 | --- | --- | --- |
 | Group priority | per-group value | Overrides fair rotation for shared-slot arbitration |
+| Reserved share | per-group fraction | **Deferred.** Guaranteed reclaimable minimum of the shared ceiling ([reserved shares](#reserved-shares--deferred-advanced-feature)) |
 | Default group | group definition | Turns unmatched-item throwing into fallback routing |
 | Per-group timeouts and capacity | per-group values | Different backpressure per group |
 | Worker-count sampler | `ctx -> number` | Inherited from [ParallelWorkers](./parallel-workers.md) |

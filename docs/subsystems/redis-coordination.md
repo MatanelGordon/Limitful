@@ -1,17 +1,21 @@
-# Redis Coordination
+# RedisSynchronizationProvider
 
-Optional cross-process coordination. By default Limitee is **in-memory and
-in-process**; enabling a Redis-backed tracker lets several processes share one
-global ceiling ([D-080](../decisions.md#d-080-in-memory-by-default-redis-is-opt-in)).
+Redis-specific technical design for a concrete
+[`SynchronizationProvider`](../utilities/synchronization-provider.md). Limitful
+controllers depend only on the backend-neutral provider contract and its
+capabilities; they never name Redis or receive a Redis adapter
+([D-163](../decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)).
 
-The architectural commitment: **coordination is advisory, never load-bearing for
-availability.** A Redis outage degrades accuracy, never liveness.
+This document owns the Redis implementation mechanics: identity sets, keys,
+scripts, liveness, cluster slotting, outage detection, and recovery. It does not
+define a competing generic coordination API
+([D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 - [Scope](#scope)
 - [Set-based counting](#set-based-counting)
 - [Liveness](#liveness)
-- [Fail-open behavior](#fail-open-behavior)
-- [The adapter](#the-adapter)
+- [Degraded and fail-open behavior](#degraded-and-fail-open-behavior)
+- [The Redis adapter](#the-redis-adapter)
 - [Cluster compliance](#cluster-compliance)
 - [Defaults](#defaults)
 - [Advanced options](#advanced-options)
@@ -21,20 +25,29 @@ availability.** A Redis outage degrades accuracy, never liveness.
 
 ## Scope
 
-When Redis is enabled, **everything is coordinated** across instances:
-`RateController` concurrency, `ParallelWorkers` counts, and the accumulators
-([D-081](../decisions.md#d-081-enabling-redis-coordinates-every-utility)).
+In-process operation is the default. A compatible utility opts into
+cross-instance coordination by receiving a `SynchronizationProvider`; choosing
+this implementation makes that provider Redis-backed. Several utilities may
+share one provider instance, but no utility is coordinated merely because
+another utility uses Redis.
 
 | Owns | Does not own |
 | --- | --- |
-| Set-based membership and counting | Connecting to Redis — the user injects an adapter ([D-085](../decisions.md#d-085-redis-access-goes-through-a-user-supplied-adapter)) |
+| Redis representation of idempotent membership, claims, and count-like state | The backend-neutral semantic contract or capability names |
 | The liveness protocol: heartbeat, last-seen, peer disqualification | Any specific Redis client library |
-| Fail-open fallback and frozen membership | Durable job storage ([INV-14](../architecture.md#invariants)) |
-| Key naming, prefixing, and deliberate hash-slot design | Cross-process job hand-off — jobs never move between processes |
+| Redis outage detection, recovery, and divided-allocation fallback | A universal outage policy for every controller |
+| Key naming, prefixing, scripts, and deliberate hash-slot design | Durable job storage or cross-process payload transfer ([INV-14](../architecture.md#invariants)) |
 
-Limitee coordinates **counts**, not work. A job submitted to one process is
-always executed by that process; Redis only tells each process how much of the
-global allowance is its share.
+The provider coordinates **permission and shared state**, not work. A job
+submitted to one process is always executed by that process. For
+divided-allocation modes, Redis tells each process how much of a shared allowance
+is its local share. Atomic-claim modes use Redis scripts/transactions to grant or
+deny permission directly.
+
+The provider declares only capabilities it can satisfy under the configured
+deployment. A controller whose required capability is absent fails configuration
+before accepting work
+([D-150](../decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)).
 
 ## Set-based counting
 
@@ -95,10 +108,14 @@ sequenceDiagram
   Note over A: Local share equals all of N
 ```
 
-## Fail-open behavior
+## Degraded and fail-open behavior
 
-**Redis must never become a dependency whose outage disables the application**
-([D-083](../decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation)).
+The provider reports healthy, degraded/uncertain, and recovered state through the
+neutral contract. The owning utility applies its documented degraded policy.
+This provider's historical fail-open behavior is retained specifically for
+**divided-allocation mode** when a finite local share was allocated before the
+outage
+([D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 Each process samples the active worker/process count periodically — roughly once
 per minute. If Redis becomes unavailable, the process **keeps running** and uses
@@ -106,10 +123,18 @@ the **last sampled count** to divide the global allowance locally until Redis
 recovers.
 
 Slow membership changes may cause a gradual, **bounded overshoot** of the global
-ceiling. That tradeoff is accepted deliberately, and it is **the one documented
-exception** to `RateController`'s hard coordinated ceiling
+ceiling. That tradeoff is accepted deliberately for this mode, and it is the
+documented Redis divided-allocation exception to `RateController`'s hard
+coordinated ceiling
 ([INV-4](../architecture.md#invariants),
 [rate-controller.md](../utilities/rate-controller.md#the-ceiling-and-the-worker-count)).
+
+This is not a generic promise for atomic global claims or time-based quotas. A
+controller that requires authoritative coordination time or an atomic global
+reservation follows its own documented outage policy. In particular,
+`ThroughputController` partition behavior remains unresolved; the provider must
+never copy an entire last-known global reservoir into every process or report a
+local approximation as a hard global guarantee.
 
 ```mermaid
 stateDiagram-v2
@@ -164,25 +189,25 @@ Frozen membership is the conservative policy: it can only shrink a process's
 share while blind, so overshoot stays bounded by the membership drift that
 occurred during the outage.
 
-## The adapter
+## The Redis adapter
 
-**The library does not bundle or control a specific Redis library.** Users inject
-their own adapter — how to connect, how to read values, how to execute commands —
-so any Redis client works
+**The Redis provider does not bundle or control a specific Redis client.** Users
+construct `RedisSynchronizationProvider` with a Redis-specific adapter describing
+how to connect and execute commands/scripts, so any client can back the provider
 ([D-085](../decisions.md#d-085-redis-access-goes-through-a-user-supplied-adapter)).
-npm has many clients; C# effectively has one; Go and Rust choices are TBD.
 
-Design goal: **adaptive, comfortable, and highly customizable.**
+The adapter is private to the concrete provider boundary. It is never accepted by
+`RateController`, `ThroughputController`, or another controller API.
 
 > Illustrative pseudocode. No public API signature is committed yet.
 
 ```text
-tracker = redisTracker({
+provider = redisSynchronizationProvider({
   adapter: {
     execute: (command, keys, args) => myClient.send(command, keys, args),
     # plus whatever each binding needs for multi-key and scripted operations
   },
-  keyPrefix: "myapp:limitee",
+  keyPrefix: "myapp:limitful",
   heartbeatInterval: seconds(10),
   stalenessThreshold: seconds(45),
   membershipDuringOutage: Membership.Frozen,
@@ -203,7 +228,7 @@ deterministic ([testing.md § Test doubles](../testing.md#test-doubles-and-overr
    those keys land in the **same hash slot**, using hash tags so related keys
    co-locate. **Every multi-key operation is an explicit slotting design point and
    must be called out, not assumed.**
-2. **User-defined key prefix.** The user can define a prefix for all Limitee keys,
+2. **User-defined key prefix.** The user can define a prefix for all Limitful keys,
    so the library coexists with a Redis instance used for other purposes without
    clobbering anything. The prefix also lets multiple rate controllers and
    mechanisms across multiple services intentionally **share or isolate**
@@ -231,14 +256,14 @@ designed.
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| Distributed coordination | **Off** | In-memory, in-process, zero dependencies ([D-080](../decisions.md#d-080-in-memory-by-default-redis-is-opt-in)) |
-| Adapter | None | Required once coordination is enabled |
+| Synchronization provider | **None** | In-memory, in-process, zero dependencies ([D-163](../decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)) |
+| Redis adapter | None | Required to construct this concrete provider |
 | Key prefix | `Undecided` | A library-identifying default is expected. Surfaced during consolidation |
 | Count sampling interval | About once per minute | ([D-083](../decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation)) |
 | Heartbeat interval | User-configurable, no value chosen | ([D-086](../decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol)) |
 | Staleness threshold | `Undecided` | Must exceed the heartbeat interval by a safe margin. Surfaced during consolidation |
 | Outage membership policy | `Undecided` | Frozen is fully defined; which policy is the default is not ([D-084](../decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined)) |
-| Outage behavior | Fail open, keep running | Not configurable ([D-083](../decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation)) |
+| Divided-allocation outage behavior | Fail open from the finite last share | Applies only to compatible divided-allocation consumers; other utilities own their degraded policy ([D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) |
 
 ## Advanced options
 
@@ -258,8 +283,9 @@ designed.
   ([INV-11](../architecture.md#invariants)).
 - An entity only ever removes **its own** ID, except through the explicit
   staleness-based peer disqualification path.
-- A Redis outage never blocks admission or stops the application
-  ([D-083](../decisions.md#d-083-a-redis-outage-fails-open-to-local-continuation)).
+- In divided-allocation mode, a Redis outage continues from the finite last
+  sampled share and reports degraded state.
+- No degraded path is described as a hard global guarantee.
 - Under frozen membership, a degraded process's allocation never grows.
 - Overshoot during an outage is bounded by membership drift, not unbounded.
 - Every multi-key operation has a documented, deliberate slot design.
@@ -268,7 +294,8 @@ designed.
 
 ## Test coverage
 
-Case IDs `RDS-xxx` in [testing.md § Redis coordination](../testing.md#redis-coordination-rds).
+Case IDs `RDS-xxx` in
+[testing.md § RedisSynchronizationProvider](../testing.md#redissynchronizationprovider-rds).
 All of them run against a **fake in-memory adapter plus an injected clock** — no
 real Redis in the business suite. A binding may additionally run an integration
 suite against a real cluster as a technical test.
@@ -282,4 +309,4 @@ suite against a real cluster as a technical test.
 | How `N` is divided across processes, including integer remainders and whether every process may round up | Not decided. Related to grouped allocation normalization ([grouped-rate-controller.md](../utilities/grouped-rate-controller.md#open-items)) |
 | The exact adapter interface, including how multi-key and scripted operations are expressed across clients | Not decided. Surfaced during consolidation |
 | Default key prefix, heartbeat interval, and staleness threshold | Not decided. Surfaced during consolidation |
-| Whether coordination can be enabled per utility or only process-wide | Not decided. `CLAUDE.md` says enabling Redis "for any utility" starts the heartbeat, which implies per-utility opt-in with a shared heartbeat. Surfaced during consolidation |
+| Whether one Redis provider instance may coordinate several scopes atomically, and how multi-scope operations are ordered | Not decided ([synchronization-provider.md](../utilities/synchronization-provider.md#open-design-questions)) |

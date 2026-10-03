@@ -1,6 +1,6 @@
 # Decision Log
 
-Durable design decisions for Limitee, consolidated from `CLAUDE.md` and the
+Durable design decisions for Limitful, consolidated from `CLAUDE.md` and the
 round-3 design grooming Q&A (`Q&A-Round-3.md`). Each entry states what was
 decided and what it costs. Superseded and rejected positions are preserved at the
 bottom rather than deleted, because the reasoning is what stops them being
@@ -24,6 +24,12 @@ direction is settled but named details are not. `Superseded` / `Rejected` — se
 - [Distributed coordination](#distributed-coordination)
 - [Observability](#observability)
 - [Project-wide](#project-wide)
+- [Shared controller contract](#shared-controller-contract)
+- [KeyedControllerRegistry](#keyedcontrollerregistry)
+- [Supervision, flushing, and shares](#supervision-flushing-and-shares)
+- [Outcome classification and adaptive presets](#outcome-classification-and-adaptive-presets)
+- [Provider capabilities](#provider-capabilities)
+- [Roadmap and scope](#roadmap-and-scope)
 - [Superseded and rejected](#superseded-and-rejected)
 - [Unresolved items](#unresolved-items)
 
@@ -40,7 +46,7 @@ that reading.
 concurrent jobs in flight at any moment, pulling from the bounded queue as slots
 free. It is not a fixed window, a sliding window, or a token bucket, and there is
 no per-second cap. 1,000 jobs arriving in the first millisecond are processed at
-whatever speed the concurrency configuration allows. Limitee implements a
+whatever speed the concurrency configuration allows. Limitful implements a
 deliberate subset of Bottleneck; minimum job spacing is not a goal.
 
 **Consequences.** Burst smoothing is not available from this utility. A per-second
@@ -61,8 +67,9 @@ budget** among workers; it must never increase total allowed in-flight work, and
 any requested count is clamped to `N`.
 
 **Consequences.** Enforcement lives in slot acquisition, never in trusting the
-worker count. The single exception is fail-open Redis-outage behavior
-([D-083](#d-083-a-redis-outage-fails-open-to-local-continuation)).
+worker count. A provider-specific degraded mode may weaken the coordinated
+guarantee only within a documented bound and must report the degradation
+([D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ### D-003 Queues are always bounded
 
@@ -262,7 +269,7 @@ explicitly chosen mode.
 
 **Status:** Accepted · **Source:** Q&A Q21
 
-**Decision.** Limitee does **not** cap the number of callers waiting outside a
+**Decision.** Limitful does **not** cap the number of callers waiting outside a
 full queue. That memory and backpressure responsibility — including any unbounded
 set of admission waiters — belongs to the caller, who composes their own upstream
 controls, such as web-controller or middleware rate limiting. The default API
@@ -550,7 +557,7 @@ lifetime, reliability must be complete and precise.
 
 ### D-080 In-memory by default; Redis is opt-in
 
-**Status:** Accepted · **Source:** `CLAUDE.md` § Deployment Model
+**Status:** Superseded by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) · **Source:** `CLAUDE.md` § Deployment Model
 
 **Decision.** In-memory / in-process by default, with an optional ability to scale
 out to a Redis cluster acting as a shared tracker, to synchronize rate control
@@ -558,7 +565,7 @@ across multiple processes in different services.
 
 ### D-081 Enabling Redis coordinates every utility
 
-**Status:** Accepted · **Source:** `CLAUDE.md` § Redis Distributed Mode
+**Status:** Superseded by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) · **Source:** `CLAUDE.md` § Redis Distributed Mode
 
 **Decision.** When Redis is enabled, **everything is coordinated** across
 instances: `RateController` concurrency, `ParallelWorkers`, and the accumulators.
@@ -567,7 +574,7 @@ instances: `RateController` concurrency, `ParallelWorkers`, and the accumulators
 
 ### D-082 Distributed counting is set-based, never increment or decrement
 
-**Status:** Accepted · **Source:** `CLAUDE.md` § Redis Distributed Mode
+**Status:** Accepted, clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) · **Source:** `CLAUDE.md` § Redis Distributed Mode
 
 **Context.** A dropped acknowledgement on an increment leaves a counter
 permanently wrong, and a retried decrement double-counts.
@@ -579,7 +586,7 @@ the set**, which is far more accurate and retry-safe than a mutated number.
 
 ### D-083 A Redis outage fails open to local continuation
 
-**Status:** Accepted · **Source:** Q&A Q1
+**Status:** Superseded in generality by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) · **Source:** Q&A Q1
 
 **Decision.** Redis must never become a dependency whose outage disables the
 application. Each process periodically samples the active worker/process count,
@@ -595,7 +602,7 @@ is the one documented exception to the hard coordinated ceiling
 
 ### D-084 Membership during an outage is configurable; frozen is defined
 
-**Status:** Accepted, with open items · **Source:** Q&A Q1
+**Status:** Accepted for the Redis divided-allocation mode, clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract), with open items · **Source:** Q&A Q1
 
 **Decision.** Two policies. **Frozen membership:** treat the last sampled count as
 the baseline — do not add capacity or account for newly appearing workers;
@@ -607,7 +614,7 @@ behavior is deferred.
 
 ### D-085 Redis access goes through a user-supplied adapter
 
-**Status:** Accepted, with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
+**Status:** Superseded as a controller boundary by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract); retained inside the Redis provider by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract), with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
 
 **Decision.** The library does not bundle or control a specific Redis library.
 Users inject their own adapter — how to connect, how to read values, how to
@@ -622,7 +629,7 @@ operations.
 
 ### D-086 Liveness is a distributed self-cleaning protocol
 
-**Status:** Accepted, with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
+**Status:** Accepted as Redis-provider mechanics, clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract), with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
 
 **Decision.** Three mechanisms keep stale IDs from crashed instances from
 inflating the set forever: **graceful removal on clean death**; a **heartbeat /
@@ -636,7 +643,7 @@ dead peers, so there is no single reaper.
 
 ### D-087 Cluster compliance requires deliberate selective slotting and a user prefix
 
-**Status:** Accepted, with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
+**Status:** Accepted as Redis-provider mechanics, clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract), with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
 
 **Decision.** Cluster compliance is a hard requirement. (1) Any operation touching
 multiple keys together must ensure those keys land in the same hash slot, using
@@ -772,16 +779,21 @@ Markdown.
 
 ### D-107 Working name is Limitee
 
-**Status:** Accepted, with open items · **Source:** `CLAUDE.md` § Name
+**Status:** Superseded by [D-162](#d-162-limitful-is-the-canonical-project-and-library-name) · **Source:** `CLAUDE.md` § Name
 
 **Decision.** The working name is **Limitee**. Not a favorite aesthetically, but it
 was verified available across all five target ecosystems — a hard constraint, since
 npm and PyPI are among the largest registries in the world and a name free across
 all five is rare. Availability wins.
 
-**Open.** This repository's directory is named `Limitful`, and the README header
-says `Limitee`. The mismatch is unexplained and should be reconciled — see
-[Unresolved items](#unresolved-items).
+**Open, and now urgent.** The name is **actively split in the documentation**:
+`Limitee` in this file, `README.md`, `CLAUDE.md`, `architecture.md`, and the
+original utility documents; `Limitful` in `throughput-controller.md`,
+`synchronization-provider.md`, and the round-4 additions. The repository directory
+is `Limitful`. Newer material consistently uses `Limitful`, which suggests a
+rename that was never recorded. **One name must win and the other must be swept**;
+until it is recorded here, new documents follow the file-local convention and the
+split keeps widening. See [Unresolved items](#unresolved-items).
 
 ### D-108 High-concurrency efficiency and impeccable DX are explicit goals
 
@@ -810,6 +822,563 @@ a link to a **Replit playground** where users can experiment with the classes.
 
 **Open.** The site's tooling, hosting, structure, and the playground's contents.
 The design documents in `docs/` are the content source, not the site itself.
+
+## Shared controller contract
+
+### D-110 A shared controller contract owns submission, job options, and admission queries
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming; `throughput-controller.md` § Shared controller contract
+
+**Context.** `RateController` and `ThroughputController` had independently
+specified submission, job metadata, and admission queries, with the shared surface
+documented inside one of the two implementations.
+
+**Decision.** The shared surface is specified once, in
+[controller-contract.md](./subsystems/controller-contract.md): submission and the
+returned awaitable outcome, `JobOptions`, advisory admission queries, bounded
+admission, cancellation, stage deadlines, drain/cancel-pending disposal,
+snapshots, and raw events. The two controllers are **peers**; neither is
+secondary.
+
+**Consequences.** `KeyedControllerRegistry` can manage any controller without
+naming a concrete type ([D-120](#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key)).
+A shared interface must never imply that pacing and concurrency have the same
+semantics, so the contract document names every divergence explicitly.
+
+### D-111 JobOptions is one shared envelope with per-controller cost semantics
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming
+
+**Decision.** One immutable submission envelope carries `id`, `priority`, `cost`,
+`cancellation`, and `deadline`. **Every field is optional and function-only
+submission remains the simple path.** Fields are evaluated once at submission and
+stored in the queued envelope, never recomputed inside a scheduling lock.
+
+**Consequences.** `cost` is shared in *name* only: `ThroughputController` spends
+credits at launch and never refunds them, while a `RateController` cost would mean
+holding several concurrency slots for a job's duration. Collapsing those into one
+semantic would be wrong, so each controller documents its own accounting.
+
+### D-112 Priority is optional, banded, and protected by aging
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming; `throughput-controller.md` § Priority
+
+**Decision.** Priority is an advanced per-job option, neutral and FIFO by default.
+It maps to a bounded set of priority bands with stable FIFO order inside each
+band — not an arbitrary comparator. When enabled, selection defaults to aging or
+weighted-fair service so ordinary work keeps a guaranteed turn; strict priority is
+an expert mode that must warn about starvation. Priority changes selection order
+only and never bypasses a hard gate.
+
+**Open.** Whether `RetryDecorator`'s three retry-priority modes
+([D-016](#d-016-retry-scheduling-priority-is-configurable)) collapse into this
+field. Two mechanisms for one concept is a simplification opportunity.
+
+### D-113 Admission estimation is advisory and never reserves capacity
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** `canStartNow` and `estimatedStartAt` report whether and when work
+appears admissible. They **never reserve**, never mutate state, and never block. A
+result may be stale the moment it returns, and two concurrent callers may both be
+told "yes".
+
+**Consequences.** They exist for early load shedding — rejecting an HTTP request
+with `Retry-After` when it cannot begin before the client's own timeout — not for
+coordinating admission. A caller that treats a query as a reservation has a race,
+by design.
+
+### D-114 EstimatedStartAt is best-effort and may be absent
+
+**Status:** Accepted · **Source:** Round-4 grooming, pushback on uniform estimation
+
+**Context.** Estimation is not equally honest on both controllers.
+`ThroughputController` derives next eligibility deterministically from its pacing
+schedule and quota refill. `RateController` cannot: a slot frees when user code
+finishes, and the library has no model of user-code duration. A statistical
+estimate from observed completion rates is wrong exactly when it matters most —
+during a latency spike, when durations stop resembling their history.
+
+**Decision.** `estimatedStartAt` returns the language's absence type when the
+controller cannot compute an estimate, and **never fabricates a number**. Where
+the value is statistical rather than computed, that distinction is **explicit in
+the return value**, not a documentation footnote. The library ships no implicit
+predictor of user-code duration; a caller may supply an estimator.
+
+### D-115 Deadline-aware admission rejects at submission with controller-bounded accuracy
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** A `deadline` in `JobOptions` means "accept only if this can begin
+before `X`". It is evaluated at submission — rejecting immediately when the
+controller can **prove** the earliest possible start is after the deadline — and
+again before launch commit, which is the existing queue-wait guarantee
+([D-036](#d-036-a-queue-wait-timeout-removes-the-item-permanently)).
+
+**Consequences.** Submission-time rejection is **sound** for
+`ThroughputController`, where eligibility is computable, and **conservative only**
+for `RateController`, which may reject only on provable infeasibility such as an
+unclearable queue. A concurrency controller must never reject at submission on a
+statistical estimate: a false rejection is an availability bug the library
+invented, whereas letting the deadline expire in the queue is already announced
+behavior ([INV-2](./architecture.md#invariants)).
+
+### D-116 Weighted concurrency cost for RateController is deferred
+
+**Status:** Deferred · **Source:** Round-4 grooming, pushback on a uniform cost field
+
+**Context.** `cost` on a concurrency controller means occupying several of `N`
+slots. That creates a head-of-line problem with no decided answer: a cost-10 job
+with `N = 10` can start only when the controller is fully idle, so under steady
+cost-1 traffic it may never start. Letting cheaper jobs pass starves it; making
+them wait blocks the queue head behind a job that cannot run.
+`ThroughputController` solved the equivalent problem by preserving order and
+waiting for the next window — but a concurrency controller has no window. It waits
+on user-code completion, which may never arrive.
+
+**Decision.** Weighted concurrency cost is deferred until a bounded-starvation
+rule exists. Until then `cost` on `RateController` is **rejected at submission
+with a clear error**, not silently ignored — shipping it as ignored would let
+callers build on a limit that is not being enforced.
+
+## KeyedControllerRegistry
+
+### D-120 KeyedControllerRegistry creates one controller per dynamic key
+
+**Status:** Accepted, draft design · **Source:** Round-4 grooming; chosen over framework adapters and a QoS partition utility
+
+**Context.** Groups are static and declared upfront
+([D-060](#d-060-groups-are-static)), but tenants, API keys, and IP addresses are
+discovered at runtime and unbounded in principle. Per-tenant and per-API-key
+limiting is the most common real-world limiter requirement and Limitful could not
+express it. Rust's Governor validates the demand with a first-class keyed limiter.
+
+**Decision.** Build `KeyedControllerRegistry` first: a lifecycle manager that
+resolves each item to a key through a caller-supplied pure selector and creates one
+controller per key on first use. It holds no queue, no slots, and no pacing state
+of its own, so every existing admission guarantee is inherited unmodified. See
+[keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md).
+
+**Consequences.** Chosen over HTTP/gRPC adapters — which would couple core code to
+framework maintenance — and over a QoS partition utility, which needs a scheduler
+redesign. Reversible with effort. Doing nothing would leave Limitful strong for
+fixed groups and awkward for tenant, IP, and API-key limits.
+
+### D-121 Idle TTL and maximum active keys are mandatory
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Context.** Keys are frequently attacker-controlled. A client sending a random
+API key per request would grow registry memory without bound.
+
+**Decision.** `idleTimeToLive` and a finite `maxActiveKeys` are **required
+configuration, not options**. There is no "never expire" value and no unbounded
+key count. Eviction counts, refusal counts, active-key count, and high-water mark
+are always observable, never debug-only.
+
+**Consequences.** This is the one Limitful utility that requires more than its
+limit, and the extra required inputs exist solely to make the memory bound
+explicit — a deliberate exception to maximizing defaults
+([D-102](#d-102-progressive-disclosure-sensible-defaults-advanced-opt-in)).
+
+### D-122 Eviction never discards live work
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** Only a key whose controller has an **empty queue and nothing in
+flight** is idle, and only an idle key is evictable. Idle means *empty*, not merely
+quiet. Eviction disposes the controller through its normal disposal path, so there
+is nothing to drain by construction.
+
+**Consequences.** Forced by [INV-1](./architecture.md#invariants): evicting a
+controller with queued work would drop that work unannounced. Reaching
+`maxActiveKeys` therefore rejects the newcomer rather than evicting an incumbent.
+
+### D-123 At-capacity refusal is distinct from queue overflow
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming
+
+**Decision.** A submission refused because the registry is at `maxActiveKeys`
+carries its own reason code, distinct from a full queue, so an operator can tell
+"this tenant is overloaded" from "we are tracking too many tenants". Separately,
+**worst-case aggregate concurrency is `maxActiveKeys × perKeyLimit`** and must be
+reported in the snapshot, with an optional `globalCeiling` across all keys included
+in the first version.
+
+**Consequences.** Independent per-key controllers reproduce exactly the
+arrangement rejected for groups
+([S-005](#s-005-fully-independent-groups-summing-to-total-concurrency)); it is
+acceptable only because it is bounded, documented, and capped on request.
+
+**Open.** Whether `globalCeiling` should be mandatory rather than recommended. The
+argument for mandatory is safety; the argument against is ergonomic only.
+
+### D-124 Registry disposal propagates and evictions are observable
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** Disposing the registry stops accepting new keys and submissions
+immediately ([INV-10](./architecture.md#invariants)), disposes every live
+controller under the chosen shutdown mode, and returns only once all of them are
+disposed. Every key creation, eviction, and at-capacity refusal is an event.
+
+**Consequences.** Raw keys may appear in events but **must not become unbounded
+metric labels** — an attacker-controlled key is the cardinality-explosion hazard
+that [observability.md](./subsystems/observability.md) warns about.
+
+## Supervision, flushing, and shares
+
+### D-130 Worker failure behavior is an explicit enumerated supervision policy
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming; resolves a prior open item
+
+**Context.** A failing *task* is isolated ([INV-12](./architecture.md#invariants)),
+but a failing *worker loop* is different: if a worker dies and is not replaced,
+throughput silently drops and stays dropped. One poisoned worker function must not
+leave a controller permanently at half capacity.
+
+**Decision.** Four enumerated policies, plus an optional per-failure callback that
+selects among them: **Isolate** (default — surface and keep looping), **Replace**
+(retire and start a fresh worker), **Reduce capacity** (retire without replacement,
+down to the minimum), and **Stop controller** (drain everything and shut down).
+Every outcome emits a worker-failure event, including under `Isolate`, so silent
+capacity loss is impossible. Replacement is creation, never revival
+([INV-8](./architecture.md#invariants)); retirement stays graceful; and replacement
+is rate-limited so a permanently failing worker cannot become a create/destroy
+spin.
+
+**Consequences.** Resolves the earlier open question of whether the failure policy
+is an enum or a callback: it is both. Supervision answers "what happens to the
+worker"; [D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures)
+answers "what does this failure mean for capacity". They are deliberately separate.
+Operational lessons are borrowed from Go worker pools such as `ants`, not their API.
+
+**Open.** Replacement backoff default, and whether repeated replacement failures
+escalate to `Stop controller` automatically.
+
+### D-131 Batches flush on size, weight, interval, manual request, or shutdown
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** A batch closes for exactly five reasons: `maxBatchSize` reached,
+`maxBatchWeight` would be exceeded, the accumulation window elapsed, an explicit
+**manual flush**, or shutdown. Manual flush is the new capability: it closes the
+current batch immediately, never exceeds a bound, awaits the batch outcomes so it
+can be used as a barrier, is a successful no-op when empty, respects composed
+admission rather than bypassing it, and coalesces with a concurrent flush.
+
+**Consequences.** Interval-plus-size cannot express "no more input is coming" — end
+of an HTTP request, end of a file, or a test asserting a deterministic batch
+boundary. Manual flush fills that gap without changing the window rules
+([D-047](#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle)).
+
+### D-132 Reserved group shares are accepted in direction and deferred in scope
+
+**Status:** Deferred · **Source:** Round-4 grooming
+
+**Context.** Per-group limits are maximums; they say how much a group **may** take,
+never how much it is **guaranteed**. Under contention a group can be squeezed to
+zero by the shared ceiling while still below its own limit, because fair rotation
+distributes opportunities rather than capacity.
+
+**Decision.** Optional reserved/minimum shares of the shared ceiling, with unused
+reservation reclaimable by other groups, are accepted as a direction and deferred
+out of the first version. Reservations are floors and limits are ceilings; both
+bind. Reserved shares must sum to at most the shared ceiling, validated at
+construction. Reclaimed capacity is surrendered on in-flight completion, never by
+preemption.
+
+**Consequences.** Stronger than priority — the difference between "checkout usually
+wins" and "checkout always has 20 percent" — but it depends on the shared-capacity
+normalization algorithm that is still undecided
+([D-062](#d-062-per-group-limits-plus-a-shared-global-ceiling)). Layering guaranteed
+floors on an undefined allocator would bake in whatever that allocator happens to
+do, so it is sequenced after normalization deliberately.
+
+## Outcome classification and adaptive presets
+
+### D-140 Callers classify outcomes; the library never infers capacity pressure from generic failures
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming
+
+**Context.** Adaptive capacity is only safe if the controller knows what a failure
+meant. A burst of caller-side validation errors is indistinguishable from
+downstream collapse if all the library can see is "the function threw".
+
+**Decision.** Callers classify each outcome as `Success`, `Throttled`,
+`Overloaded`, `TransientFailure`, `CallerError`, or `Ignore`. `Throttled` and
+`Overloaded` reduce capacity; `CallerError` has **no capacity effect**;
+`TransientFailure` is neutral by default. With no classifier supplied, every
+failure is treated as `TransientFailure`, so adaptation can reduce capacity only
+from explicit signals — never from raw failure counts. Cancellation is never a
+capacity signal. Classes are a bounded enum usable as a metric dimension, and
+classification never alters the caller's own outcome.
+
+**Consequences.** The decisive pair is `Throttled` versus `CallerError`: a
+downstream 429 must reduce throughput, and a malformed payload must not. Without
+it, a client sending bad input could drive a service to throttle itself. This is
+why AWS's adaptive retry mode treats throttling as its own category.
+
+### D-141 One outcome-classification vocabulary is shared with the retry predicate
+
+**Status:** Accepted in principle, with open items · **Source:** Round-4 grooming
+
+**Decision.** The classification vocabulary in
+[D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures)
+is the definition of an **"ordinary failure"** that
+[D-011](#d-011-retrydecorator-retries-every-ordinary-failure-by-default) left open:
+`TransientFailure`, `Throttled`, and `Overloaded` are retryable, `CallerError` is
+not, and cancellation is terminal. One vocabulary shared by `RetryDecorator` and
+`AdaptiveCapacityPolicy` is strongly preferred over two parallel taxonomies of
+failure.
+
+**Open.** Whether the two surfaces literally share a type, and whether the retry
+predicate then becomes expressible as a classifier.
+
+### D-142 Adaptive presets are opt-in and the congestion preset comes later
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** Presets are opt-in and never implicit; their presence in the library
+is not consent to adapt. `DefaultOverclockPolicy` — demand-driven upward
+adaptation — ships now as the built-in opt-in policy. A **congestion policy** —
+pressure-driven downward adaptation when latency or failure pressure rises — is
+accepted in direction and specified later.
+
+**Consequences.** The two are complements: one finds spare capacity, the other
+finds where a dependency starts degrading. Congestion control is the more broadly
+useful of the two in production, as Netflix's concurrency-limits demonstrates, but
+it is sequenced second because it needs outcome classification and a trustworthy
+latency signal first. A congestion controller fed unclassified failures would
+reduce capacity in response to caller errors — the exact outage it exists to
+prevent.
+
+## Provider capabilities
+
+### D-150 Providers declare capabilities and insufficient providers fail configuration
+
+**Status:** Accepted, with open items · **Source:** Round-4 grooming; resolves a prior open question
+
+**Decision.** A provider **declares** its capabilities — atomic claim, leases and
+TTL, membership, idempotent identity sets, authoritative coordination time,
+configuration epoch, health and degradation signal. A controller **requires** a
+named subset, and configuration **fails loudly at startup** when the two do not
+match, naming the missing capability and the utility that required it. Declaration
+is explicit and machine-checkable, never inferred from a backend's name. Partial
+support is no support: "atomic except during failover" is not atomic. A provider
+must never emulate a strict guarantee with eventual local guesses.
+
+**Consequences.** `ThroughputController` cannot be coordinated without
+authoritative coordination time, because pacing is a statement about *when*.
+`GroupedRateController` needs a claim that checks the group limit and the global
+limit **together**, so a provider offering only single-limit claims must be
+rejected for grouped use even though it would serve a plain `RateController`. A
+PostgreSQL provider that cannot express the grouped atomic claim is rejected at
+startup instead of quietly degrading a tenant-isolation guarantee an operator
+believes is enforced.
+
+**Open.** Whether a capability can be declared at a *level* — "atomic claim,
+single limit only" versus "multi-limit" — rather than as a boolean.
+
+## Roadmap and scope
+
+### D-160 Roadmap order: keyed registry, then shared job options, then supervision, then outcome classification
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** Build in this order:
+
+1. **`KeyedControllerRegistry`** — one new core utility plus tests
+   ([D-120](#d-120-keyedcontrollerregistry-creates-one-controller-per-dynamic-key)).
+2. **Shared `JobOptions` plus deadline estimation** — the shared controller
+   contract, advisory queries, and deadline-aware admission
+   ([D-110](#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)
+   through [D-115](#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy)).
+3. **Worker supervision**
+   ([D-130](#d-130-worker-failure-behavior-is-an-explicit-enumerated-supervision-policy)).
+4. **Outcome classification**
+   ([D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures)).
+
+Then, in no committed order: keyed-registry safeguards hardening, accumulator
+flush controls
+([D-131](#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown)),
+adaptive presets
+([D-142](#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)),
+grouped QoS shares
+([D-132](#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope)),
+and provider capability checks
+([D-150](#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)).
+
+**Consequences.** The ordering is dependency-driven, not value-driven: the registry
+needs the shared contract to be useful across controller types, outcome
+classification needs to exist before a congestion preset can be trusted, and QoS
+shares need the grouped normalization algorithm first.
+
+### D-161 Explicitly out of scope
+
+**Status:** Accepted · **Source:** Round-4 grooming
+
+**Decision.** The following are deliberately not built, and a proposal to add one
+must argue against this record:
+
+| Not building | Why |
+| --- | --- |
+| Generic distributed payload or job queueing in the synchronization provider | The provider coordinates permission and shared state, never executable work. A durable transport is a different product with a different reliability contract ([D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract)) |
+| Adaptive behavior on by default | Hidden adaptation is how limiters cause outages. It stays opt-in ([D-142](#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)) |
+| Unbounded completed-job history | Retaining every finished job ID forever is a memory leak with a reporting excuse. Retention is opt-in and bounded |
+| A built-in metrics database | Core exposes raw events and snapshots; aggregation and storage belong to the user's stack ([D-090](#d-090-observability-is-event-driven-and-exposes-raw-data)) |
+| Exactly-once execution promises for user functions | Unachievable without durable storage and idempotent user code, neither of which the library owns ([D-072](#d-072-job-persistence-across-restarts-is-out-of-scope)) |
+| Framework-specific APIs in core | Go HTTP/gRPC and Rust Tower/Axum integrations ship as separate adapter packages, following the same zero-dependency rule as the OTel package ([D-091](#d-091-otel-is-a-separate-opt-in-package-per-language)) |
+
+**Consequences.** Adapters are explicitly *not* rejected — only their presence in
+core is. A Tower `ConcurrencyLimitLayer`-style adapter over `RateController` is a
+welcome separate package.
+
+### D-162 Limitful is the canonical project and library name
+
+**Status:** Accepted · **Source:** User decision; supersedes [D-107](#d-107-working-name-is-limitee)
+
+**Decision.** The canonical current name of the repository, project, library,
+packages, documentation, examples, and future native bindings is **Limitful**.
+New and maintained normative material uses `Limitful`.
+
+**Consequences.** Historical material remains historical: the superseded D-107
+record and the raw `Q&A-Round-3.md` transcript retain `Limitee` where that was the
+name actually used. Preserving those references records provenance; it does not
+create a current alias, compatibility promise, or unresolved naming question.
+
+### D-163 SynchronizationProvider is the backend-neutral public contract
+
+**Status:** Accepted · **Source:** User decision; supersedes [D-080](#d-080-in-memory-by-default-redis-is-opt-in), [D-081](#d-081-enabling-redis-coordinates-every-utility), and the controller-facing part of [D-085](#d-085-redis-access-goes-through-a-user-supplied-adapter)
+
+**Decision.** `SynchronizationProvider` is the sole public cross-instance
+coordination boundary. Controller and utility APIs depend on its semantic
+operations and declared capabilities; they never name Redis, PostgreSQL, a client
+library, raw commands, or a backend adapter. In-process operation remains the
+zero-dependency default. Coordination is enabled explicitly per compatible
+utility by injecting a provider; several utilities may share one provider
+instance without making coordination process-wide or implicit.
+
+A utility declares the capabilities it requires, and configuration fails before
+work is accepted when the provider cannot supply them
+([D-150](#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)).
+The provider coordinates permission and shared state, never executable payloads
+or a durable job queue ([D-161](#d-161-explicitly-out-of-scope)).
+
+**Consequences.** Backend packages implement this contract. The old statement
+that "enabling Redis coordinates every utility" no longer defines the API or
+activation model. A backend-specific adapter may still be injected into its
+concrete provider, but it never appears in a controller constructor or contract.
+
+### D-164 Redis coordination is a concrete provider under the neutral contract
+
+**Status:** Accepted, with inherited open items · **Source:** User decision; clarifies [D-082](#d-082-distributed-counting-is-set-based-never-increment-or-decrement) through [D-087](#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix)
+
+**Decision.** `RedisSynchronizationProvider` is a concrete implementation of
+`SynchronizationProvider`, not a competing generic coordination subsystem. Its
+technical design owns Redis-specific identity sets, commands/scripts, key
+prefixes, hash-slot placement, heartbeat records, stale-member pruning, outage
+detection, and recovery. Its user-supplied Redis adapter remains the backend test
+and client-integration seam described by D-085.
+
+D-083's fail-open rule is narrowed from a project-wide controller rule to the
+Redis provider's **divided-allocation mode** when the owning utility has a finite
+previously allocated local share and documents that degraded behavior. The
+provider reports degradation; the utility owns the product-level choice and must
+not label a local approximation as a hard global guarantee. Capabilities that
+need atomic global claims or authoritative coordination time do not acquire a
+generic fail-open promise from this record. In particular, unresolved
+`ThroughputController` partition behavior remains unresolved.
+
+**Consequences.** D-082 remains the Redis representation rule and the
+backend-neutral idempotency requirement. D-084's frozen-membership behavior,
+D-086's self-cleaning liveness protocol, and D-087's cluster slotting rules remain
+valid Redis-provider mechanics. Their existing open choices remain open; this
+record does not guess the non-frozen policy, allocation remainder algorithm,
+multi-key layout, adapter interface, or timing defaults.
+
+### D-165 ThroughputController spends time credits atomically at launch
+
+**Status:** Accepted · **Source:** `throughput-controller.md`
+
+**Decision.** `ThroughputController` is the time-based peer of
+`RateController`. Cost is a positive immutable value evaluated once at
+submission, defaults to `1`, and is spent exactly once at the atomic launch
+commit. Completion, failure, and cancellation after commit do not refund it. A
+cost that can never fit the configured maximum fails at submission rather than
+waiting forever.
+
+This record does not choose the simple API's pacing model, make fixed windows the
+default, or decide whether weighted cost affects pacing as well as quota. Those
+choices remain open in the owning utility document.
+
+**Consequences.** The utility limits when work may start, not how many started
+jobs remain in flight. A concurrency ceiling requires explicit composition with
+`RateController`. Every retry attempt re-enters admission and spends its own
+credit.
+
+### D-166 ThroughputController uses one bounded event-driven scheduler
+
+**Status:** Accepted · **Source:** `throughput-controller.md`
+
+**Decision.** Each `ThroughputController` owns one bounded queue and one
+event-driven scheduling loop with at most one armed wake-up for the earliest
+known eligibility. It has no busy polling, timer per item, sleep per item, or
+worker per queued job. User functions, policies, and event handlers run outside
+the scheduler lock.
+
+The controller follows the shared drain and cancel-pending lifecycle. Drain
+continues to honor pacing and quota; cancel-pending announces every queued
+non-execution; already-started work may finish. Ordered disposal releases timers,
+subscriptions, provider reservations, and membership. Details already marked
+open in the owning documents—such as drain escalation and awaiting-insertion
+shutdown races—remain open.
+
+### D-167 AdaptiveCapacityPolicy proposes; controllers validate and clamp
+
+**Status:** Accepted · **Source:** `adaptive-capacity-policy.md`; complements [D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capacity-pressure-from-generic-failures) through [D-142](#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)
+
+**Decision.** `AdaptiveCapacityPolicy` is an opt-in, reusable, pure policy
+boundary. It receives immutable normalized inputs and proposes an effective
+capacity plus a bounded reason code. The owning controller—not the policy—validates
+freshness and numeric validity, clamps the proposal to its documented envelope,
+applies hysteresis/dwell/cooldown, and commits the state transition.
+
+Policy evaluation is synchronous, side-effect free, outside scheduling locks, and
+never performs remote measurement. A throwing policy, stale/invalid signal, or
+shutdown ends any overclock and returns to a safe controller-defined target
+without failing queued work. Adaptation never raises a hard ceiling, manufactures
+quota, accumulates unused headroom, or becomes enabled by the mere presence of
+metrics.
+
+### D-168 Probe retains the latest successful value with freshness metadata
+
+**Status:** Accepted · **Source:** `probe.md`
+
+**Decision.** `Probe<T>` periodically invokes a user measurement function and
+publishes an immutable snapshot containing the latest successful value, success
+and attempt times, latest failure, freshness, and a monotonically increasing
+successful generation. A failed refresh updates failure metadata but never clears
+or replaces the last-known-good value. Before the first success, `current()`
+returns the language-idiomatic absence type, never a fabricated fallback.
+
+The default history capacity is one and every configured history is bounded.
+Probe reports data and freshness; callers decide what stale, unavailable, or
+unhealthy means.
+
+### D-169 Probe refreshes serially and coalesces missed intervals
+
+**Status:** Accepted · **Source:** `probe.md`
+
+**Decision.** A probe starts its first refresh immediately. At most one
+measurement invocation is active for that probe. Later intervals begin after the
+preceding refresh completes; a tick due during an active refresh is coalesced into
+one subsequent refresh rather than overlapping or accumulating timers. The
+measurement runs outside probe state synchronization, and publishing success or
+failure is one atomic snapshot transition.
+
+Refresh uses an injectable monotonic clock/scheduler and cooperative
+cancellation/timeout; the default refresh timeout equals the interval.
 
 ## Superseded and rejected
 
@@ -880,11 +1449,35 @@ data loss. Neither is available in any utility, in any configuration.
 
 ### S-008 Failing closed during a Redis outage
 
-**Status:** Rejected by [D-083](#d-083-a-redis-outage-fails-open-to-local-continuation)
+**Status:** Rejected for Redis divided-allocation mode by [D-083](#d-083-a-redis-outage-fails-open-to-local-continuation); scope clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)
 
 Stop admitting work during a Redis outage to preserve the global ceiling exactly.
 Rejected: Redis must never be a dependency whose outage disables the application.
 Bounded overshoot is the accepted price.
+
+### S-009 Minimum job spacing is not a goal
+
+**Status:** Superseded by [D-001](#d-001-ratecontroller-limits-by-concurrency-not-by-time-window) and `ThroughputController`
+
+The original scope said Limitful implements a subset of Bottleneck in which
+"minimum job spacing is not a goal". That remains true **of `RateController`**,
+which is still purely a concurrency limiter. It is no longer true of the library:
+[`ThroughputController`](./utilities/throughput-controller.md) offers optional
+`minimumStartSpacing` and smooth pacing as an explicit traffic-shaping choice. The
+capability moved to a separate utility rather than being abandoned.
+
+### S-010 A per-second limiter is merely under consideration
+
+**Status:** Superseded — now built as `ThroughputController`
+
+Earlier rounds listed "a separate per-second rate limiter" as an open item that
+was explicitly *not* `RateController`. That question is resolved: the utility
+exists as [`ThroughputController`](./utilities/throughput-controller.md), a peer of
+`RateController` under the shared controller contract
+([D-110](#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)),
+with its own pacing, quota, cost, and adaptive-policy design. The two remain
+deliberately separate utilities: one bounds work in flight, the other bounds when
+work may start.
 
 ## Unresolved items
 
@@ -894,7 +1487,7 @@ answer. **A blocked test case must never be implemented by guessing**
 
 | Area | Question | Owner | Origin |
 | --- | --- | --- | --- |
-| Rate limiting | Whether a separate per-second rate limiter utility is built at all | [rate-controller.md](./utilities/rate-controller.md#open-items) | `CLAUDE.md` |
+| ~~Rate limiting~~ | ~~Whether a separate per-second rate limiter utility is built~~ **Resolved: `ThroughputController`** | [S-010](#s-010-a-per-second-limiter-is-merely-under-consideration) | `CLAUDE.md` |
 | Rate limiting | Default `maxQueued`, and default execution timeout | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Consolidation |
 | Retries | API shape and naming of the awaited and deferred paths | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Q&A Q4 |
 | Retries | Delayed-retry versus terminal dead-letter semantics | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Q&A Q4 |
@@ -933,9 +1526,23 @@ answer. **A blocked test case must never be implemented by guessing**
 | Redis | Division of `N` across processes, including integer remainders | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
 | Redis | The exact adapter interface for multi-key and scripted operations | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
 | Redis | Default key prefix, heartbeat interval, and staleness threshold | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
-| Redis | Whether coordination is per-utility or process-wide | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
+| ~~Redis~~ | ~~Whether coordination is per-utility or process-wide~~ **Resolved: explicitly enabled per compatible utility by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract), never process-wide or implicit** | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
 | Observability | Event payload shapes, delivery synchronicity, ordering guarantees | [observability.md](./subsystems/observability.md#open-items) | Consolidation |
 | Observability | OTel metric and span naming conventions | [observability.md](./subsystems/observability.md#open-items) | Consolidation |
-| Project | Library name: `Limitee` is recorded, but this repository is `Limitful` | [D-107](#d-107-working-name-is-limitee) | Consolidation |
 | Project | Which binding lands first, and per-language test tooling | [testing.md](./testing.md#open-items) | Consolidation |
 | Docs | The docs site's tooling, hosting, structure, and Replit playground contents | [D-109](#d-109-a-docs-site-with-per-utility-examples-and-a-playground-is-a-deliverable) | `CLAUDE.md` § Notes |
+| Controller contract | Whether `RetryDecorator`'s three priority modes collapse into `JobOptions.priority`, and where probabilistic prioritization then lives | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
+| Controller contract | The bounded-starvation rule that would unblock weighted concurrency cost | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
+| Controller contract | Priority band count, and whether aging or weighted-fair is the advanced default | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
+| Controller contract | Whether `estimatedStartAt` accepts a caller-supplied duration estimator | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
+| Controller contract | Whether the shared contract is a language interface or only a documented shape in Go and Rust | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
+| Keyed registry | Whether `globalCeiling` is mandatory rather than recommended | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
+| Keyed registry | Whether idle TTL runs from last submission or from the moment the controller became empty | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
+| Keyed registry | Eviction selection among several evictable keys, and whether eviction may be preemptive | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
+| Keyed registry | Whether per-key cross-instance scopes are affordable at 10,000 keys | [keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md#open-items) | Round 4 |
+| Workers | Replacement backoff default, and whether repeated replacement failures escalate to `Stop controller` | [parallel-workers.md](./utilities/parallel-workers.md#open-items) | Round 4 |
+| Adaptive | Whether `RetryDecorator` and the adaptive policy share one outcome-classification type | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
+| Adaptive | The congestion preset's algorithm and latency-signal source | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
+| Adaptive | Whether the 80/20 safety-pressure guidance is a default or only documentation | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
+| Grouped | Reserved-share allocation, pending the normalization algorithm | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Round 4 |
+| Provider | Whether capabilities are booleans or declared at a level | [synchronization-provider.md](./utilities/synchronization-provider.md#open-design-questions) | Round 4 |

@@ -6,7 +6,9 @@
 `ThroughputController` is the time-based counterpart to
 [`RateController`](./rate-controller.md). `RateController` limits how
 many jobs are in flight. `ThroughputController` limits **when work may start** and
-how much time-based quota each start consumes.
+how much time-based quota each start consumes
+([D-165](../decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch),
+[D-166](../decisions.md#d-166-throughputcontroller-uses-one-bounded-event-driven-scheduler)).
 
 The two utilities are deliberately separate:
 
@@ -30,7 +32,7 @@ independent and follow Limitful's own reliability and portability principles.
 - [Terminology](#terminology)
 - [Simple public behavior](#simple-public-behavior)
 - [Start eligibility and accounting](#start-eligibility-and-accounting)
-- [Minimum spacing and smooth pacing](#minimum-spacing-and-smooth-pacing)
+- [Optional minimum spacing and smooth pacing](#optional-minimum-spacing-and-smooth-pacing)
 - [Quota and reservoir behavior](#quota-and-reservoir-behavior)
 - [Job options](#job-options)
 - [Queue, admission, deadlines, and cancellation](#queue-admission-deadlines-and-cancellation)
@@ -39,12 +41,12 @@ independent and follow Limitful's own reliability and portability principles.
 - [Lifecycle](#lifecycle)
 - [Live updates](#live-updates)
 - [Composition and chaining](#composition-and-chaining)
-- [Distributed coordination](#distributed-coordination)
+- [Cross-instance synchronization](#cross-instance-synchronization)
 - [Observability](#observability)
 - [Proposed defaults](#proposed-defaults)
 - [Cross-language portability](#cross-language-portability)
 - [Draft invariants](#draft-invariants)
-- [Candidate behavioral tests](#candidate-behavioral-tests)
+- [Test coverage](#test-coverage)
 - [Unresolved design questions](#unresolved-design-questions)
 
 ## Responsibility and boundaries
@@ -174,40 +176,30 @@ the stricter constraint wins for every start.
 
 ## Shared controller contract
 
-`ThroughputController` and `RateController` are peer implementations of one
-neutral shared controller abstraction—`ILimitfulController` in C# and an
-idiomatic equivalent in the other target languages. Neither is secondary.
+`ThroughputController` and [`RateController`](./rate-controller.md) are **peer**
+implementations of one neutral abstraction. That surface — submission, the
+returned awaitable outcome, [`JobOptions`](../subsystems/controller-contract.md#joboptions),
+advisory admission queries, bounded admission, cancellation, stage deadlines,
+drain/cancel-pending disposal, immutable snapshots, and raw events — is specified
+once in [controller-contract.md](../subsystems/controller-contract.md)
+([D-110](../decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)).
 
-The shared contract covers submission and the returned awaitable outcome,
-bounded admission, cancellation, stage deadlines, drain/cancel-pending
-disposal, immutable snapshots, raw lifecycle events, metrics/export hooks, and
-common job metadata such as identity, priority, tags, and cancellation. Concrete
-options remain distinct: `RateController` owns in-flight capacity and worker
-coordination, while `ThroughputController` owns pacing, quota, cost, refill, and
-saturation/overclock policy. A shared interface must not imply that those
-different controls have the same semantics.
+What this controller contributes to that contract:
 
-```mermaid
-classDiagram
-  class LimitfulController {
-    <<interface>>
-    +run(work, jobOptions) outcome
-    +tryRun(work, jobOptions) outcome
-    +snapshot()
-    +events()
-    +dispose(mode)
-  }
-  class RateController {
-    +maxInFlight
-    +worker coordination
-  }
-  class ThroughputController {
-    +pace / quota
-    +saturation policy
-  }
-  LimitfulController <|.. RateController
-  LimitfulController <|.. ThroughputController
-```
+- **`cost` is fully supported**, spent at launch and never refunded — unlike
+  `RateController`, where weighted cost is deferred
+  ([D-116](../decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)).
+- **`estimatedStartAt` is computable, not statistical.** Next eligibility follows
+  deterministically from the pacing schedule, the quota balance, and the refill
+  clock, so this controller returns a computed value where `RateController` can
+  only estimate ([D-114](../decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent)).
+- **Deadline rejection at submission is sound**, for the same reason: "cannot
+  start before `X`" is a proof here
+  ([D-115](../decisions.md#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy)).
+
+A shared interface must not imply that pacing and concurrency mean the same
+thing; the contract document names every place the surface is common but the
+semantics are not.
 
 ## Start eligibility and accounting
 
@@ -318,6 +310,11 @@ must fail at submission with a configuration/admission error. Accepting work
 that can never start would violate the queue reliability contract.
 
 ## Job options
+
+The shared envelope — identity, priority, cost, cancellation, start deadline —
+is specified in
+[controller-contract.md § JobOptions](../subsystems/controller-contract.md#joboptions).
+This section records how `ThroughputController` accounts for each field.
 
 ### Weighted cost
 
@@ -442,11 +439,12 @@ safety pressure can veto or end an overclock. They are not the same signal.
 
 The usual advanced path is therefore a user-supplied saturation function. The
 shared [AdaptiveCapacityPolicy](./adaptive-capacity-policy.md)
-defines the cross-controller policy boundary; its future `DefaultOverclockPolicy`
-implementation may be opted into by callers who want documented automatic
-inference from sustained capacity hits and worker saturation, with optional
-safety-pressure input. It is not enabled merely because those measurements exist
-and it is not hidden default behavior of any controller.
+defines the cross-controller policy boundary; its built-in
+`DefaultOverclockPolicy` implementation ships now and may be opted into by
+callers who want documented automatic inference from sustained capacity hits and
+worker saturation, with optional safety-pressure input. It is not enabled merely
+because those measurements exist and it is not hidden default behavior of any
+controller.
 
 Signal acquisition must not block the scheduler. A pull provider is fast and
 synchronous, normally reading a cached measurement. Expensive or remote
@@ -767,11 +765,13 @@ If a process starts during an outage with no lease, the choices are:
 - use an explicitly configured emergency local rate, preserving availability
   but weakening the global guarantee by a stated bound.
 
-This conflicts with the current project-wide unconditional fail-open principle
-and must be resolved explicitly before cross-instance `ThroughputController` is
-accepted. The controller must never describe a degraded limit as globally hard.
-Snapshots and events expose degradation, lease balance, configuration epoch, and
-recovery.
+There is no project-wide unconditional fail-open rule: the provider reports
+degradation and this controller owns the product-level choice
+([D-163](../decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
+[D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
+The exact default choice for `ThroughputController` remains unresolved. The
+controller must never describe a degraded limit as globally hard. Snapshots and
+events expose degradation, lease balance, configuration epoch, and recovery.
 
 Adaptive decisions in distributed mode are versioned and shared. Independent
 per-process overclock would multiply the global rate and is forbidden. A stale
@@ -897,33 +897,13 @@ only surface syntax and runtime primitives differ.
 13. The same normalized inputs, virtual time, and policy decisions produce the
     same allowed outcomes in all five languages.
 
-## Candidate behavioral tests
+## Test coverage
 
-If the utility is accepted, these become shared Markdown-spec cases with stable
-IDs rather than implementation-specific tests:
-
-- first cost-1 job starts immediately and later starts obey the derived pace;
-- timer lateness does not produce a catch-up burst;
-- weighted cost advances pacing and consumes quota exactly once;
-- refill adds up to capacity and reset replaces unused balance;
-- an impossible cost is rejected before queueing;
-- cancellation before launch wins without spending cost;
-- launch commit winning the cancellation race spends cost once and reports one
-  terminal outcome;
-- priority never bypasses a hard time or quota gate;
-- queue-wait expiry guarantees no later launch;
-- a live rate increase creates no retroactive credit;
-- a capacity decrease never evicts queued work;
-- drain continues to honor time limits and cancel-pending announces every
-  non-execution;
-- adaptive decisions obey bounds, hysteresis, ramp, dwell, and cooldown;
-- stale or failing saturation input ends overclock and cannot fail jobs;
-- overclock expires under virtual time even if no new signal arrives;
-- no adaptive change manufactures quota or burst capacity;
-- a distributed retry with the same reservation ID spends once;
-- a stale distributed configuration may reduce but never increase allowance;
-  and
-- every case runs under an injected clock with no real sleeps.
+Stable business cases are `TC-xxx` in
+[testing.md § ThroughputController](../testing.md#throughputcontroller-tc).
+Shared submission, deadline, queue, and lifecycle behavior is additionally covered
+by the `JO`, `QA`, and `LC` suites. Adaptive behavior is covered by `AC`; neutral
+cross-instance behavior by `SP`.
 
 Technical tests should additionally cover timer coalescing, scheduler wake-up
 storms, cancellation tombstone cleanup, hot-path allocations, long-running
@@ -996,7 +976,7 @@ failover, and partition recovery.
     maximum lease size and unused-lease expiry?
 28. How are strict global pacing and cross-process network latency reconciled?
 29. What measurable overshoot bound applies in fail-open mode?
-30. May this utility offer fail-closed quota safety even though the existing
-    project-wide synchronization principle is unconditional fail-open?
+30. Which degraded-mode default balances fail-closed quota safety against an
+    explicitly bounded emergency local rate?
 31. What happens when a new process starts during an outage with no local lease?
 32. Which lifecycle, priority, and queue metrics are local versus global?

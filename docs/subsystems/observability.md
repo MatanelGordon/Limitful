@@ -1,6 +1,6 @@
 # Observability
 
-Limitee is built around an **event-driven architecture with a rich set of niche
+Limitful is built around an **event-driven architecture with a rich set of niche
 events**, exposing data **raw** so each developer wires it into their own
 observability as they see fit
 ([D-090](../decisions.md#d-090-observability-is-event-driven-and-exposes-raw-data)).
@@ -123,7 +123,7 @@ The package emits both metrics and traces:
    the span tree: their spans, their trace
    ([D-092](../decisions.md#d-092-user-traces-pass-through-cleanly-library-spans-are-targeted)).
 3. **Custom library spans** — a few targeted spans around the library's own
-   stages, so a user can diagnose when slowness comes from Limitee rather than
+   stages, so a user can diagnose when slowness comes from Limitful rather than
    from their own code:
 
 | Span | Answers |

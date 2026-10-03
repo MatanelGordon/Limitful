@@ -8,6 +8,7 @@ builds on it or composes around it.
 
 - [Scope](#scope)
 - [Public behavior](#public-behavior)
+- [Shared controller contract](../subsystems/controller-contract.md)
 - [Defaults](#defaults)
 - [Advanced options](#advanced-options)
 - [Lifecycle, cancellation, and timeouts](#lifecycle-cancellation-and-timeouts)
@@ -25,7 +26,7 @@ Up to `N` jobs run at any given moment. There is no fixed window, no sliding
 window, no token bucket, and no per-second cap. 1,000 jobs arriving in the first
 millisecond are processed as fast as the concurrency configuration allows.
 
-Limitee implements a deliberate **subset of Bottleneck**: rate control plus the
+Limitful implements a deliberate **subset of Bottleneck**: rate control plus the
 concurrency `ParallelWorkers` already provides. Minimum job spacing is explicitly
 not a goal.
 
@@ -50,6 +51,27 @@ limiter = rateController({ concurrency: 10 })
 result  = await limiter.run(() => callApi(x))   # submit one job
 limited = limiter.wrap(callApi)                 # wrap a function once, call it many times
 ```
+
+`RateController` and [`ThroughputController`](./throughput-controller.md) are peer
+implementations of the
+[shared controller contract](../subsystems/controller-contract.md), which owns
+submission, optional [`JobOptions`](../subsystems/controller-contract.md#joboptions)
+— identity, priority, cost, cancellation, start deadline — and the advisory
+admission queries ([D-110](../decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)).
+Three consequences are specific to this controller:
+
+- **`cost` is rejected at submission.** Weighted concurrency — one job occupying
+  several of `N` slots — is deferred until a bounded-starvation rule exists for a
+  heavy job that can never find enough free slots
+  ([D-116](../decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)).
+  It fails loudly rather than being silently ignored.
+- **`estimatedStartAt` may return absence.** A slot frees when user code finishes,
+  which this controller cannot predict; any estimate is statistical and is marked
+  as such ([D-114](../decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent)).
+- **Deadline rejection at submission is conservative.** It rejects only when
+  infeasibility is provable — such as a provably unclearable queue — and otherwise
+  accepts and lets the queue-wait deadline do its job
+  ([D-115](../decisions.md#d-115-deadline-aware-admission-rejects-at-submission-with-controller-bounded-accuracy)).
 
 ### The ceiling and the worker count
 
@@ -119,6 +141,9 @@ attempt ([INV-6](../architecture.md#invariants)).
 | Clock | System clock | Injectable ([D-103](../decisions.md#d-103-the-clock-is-public-api)) |
 | Synchronization provider | None | In-memory, in-process by default; opt in for cross-instance coordination ([SynchronizationProvider](./synchronization-provider.md)) |
 | Retries | None, not configurable | ([D-004](../decisions.md#d-004-ratecontroller-never-retries)) |
+| `JobOptions` | Entirely absent | Function-only submission is the simple path ([controller-contract.md](../subsystems/controller-contract.md#joboptions)) |
+| `JobOptions.cost` | Rejected at submission | Weighted concurrency deferred ([D-116](../decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)) |
+| `JobOptions.priority` | Neutral, FIFO | Banded and aging-protected when enabled ([D-112](../decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging)) |
 
 ## Advanced options
 
@@ -133,6 +158,8 @@ attempt ([INV-6](../architecture.md#invariants)).
 | Synchronization provider | injected | Cross-process shared ceiling ([SynchronizationProvider](./synchronization-provider.md#ratecontroller)) |
 | Synchronization scope | caller-defined string | Namespaces one shared cross-instance limit |
 | Event handlers | callbacks | Raw observability ([observability.md](../subsystems/observability.md)) |
+| `JobOptions` | per-submission envelope | Identity, priority, cancellation, start deadline ([controller-contract.md](../subsystems/controller-contract.md#joboptions)) |
+| `canStartNow` / `estimatedStartAt` | advisory queries | Early load shedding; never reserve capacity ([D-113](../decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity)) |
 | Adaptive capacity policy | injected, off by default | May guide worker/target behavior but never raise hard ceiling `N` ([AdaptiveCapacityPolicy](./adaptive-capacity-policy.md)) |
 
 ## Lifecycle, cancellation, and timeouts
@@ -208,5 +235,7 @@ behavior by `PW-xxx`.
 | --- | --- |
 | Default `maxQueued` value | Not decided. The queue must be bounded, but no default bound has been chosen. Surfaced during consolidation |
 | Default execution timeout, if any | Not decided |
-| Whether a separate **per-second rate limiter** utility is built | Under consideration, not committed. It would be entirely different logic — real time windows, bursts — and is explicitly *not* `RateController` ([D-001](../decisions.md#d-001-ratecontroller-limits-by-concurrency-not-by-time-window)) |
+| ~~Whether a separate **per-second rate limiter** utility is built~~ | **Resolved:** it is [`ThroughputController`](./throughput-controller.md), a peer utility with its own document ([S-010](../decisions.md#s-010-a-per-second-limiter-is-merely-under-consideration)) |
+| The bounded-starvation rule that would unblock weighted concurrency `cost` | Not decided ([D-116](../decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)) |
+| Whether `estimatedStartAt` accepts a caller-supplied duration estimator | Not decided ([controller-contract.md](../subsystems/controller-contract.md#open-items)) |
 | How `N` is divided across processes in distributed mode, including remainders | Not decided; related to grouped allocation normalization ([grouped-rate-controller.md](./grouped-rate-controller.md#open-items)) |

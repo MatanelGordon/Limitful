@@ -7,6 +7,10 @@
 `Probe<T>` runs a user-supplied measurement function periodically and publishes its most recently successful value. Health checks, controllers, and diagnostics consume its `ProbeSnapshot<T>` without being directly coupled to an expensive, remote, or failure-prone source.
 
 If a refresh fails, the last successful value remains available. Its age, last successful check, last attempted check, and latest error remain visible so each consumer can decide whether it is safe to use.
+These contracts are recorded in
+[D-168](../decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata)
+and
+[D-169](../decisions.md#d-169-probe-refreshes-serially-and-coalesces-missed-intervals).
 
 ```mermaid
 flowchart LR
@@ -76,3 +80,9 @@ Advanced options may add an injected monotonic clock/scheduler, explicit freshne
 ## Relationship to controllers
 
 Controllers may receive a `Probe<T>` only as an optional read-only source. For example, `DefaultOverclockPolicy` can read a probed health or saturation value without invoking its measurement function or waiting in a controller hot path. Probe remains independent and usable without any controller across C#, TypeScript, Rust, Go, and Python.
+
+## Test coverage
+
+Case IDs `PB-xxx` in [testing.md § Probe](../testing.md#probe-pb) cover
+last-known-good retention, freshness, serial refresh, timeout/cancellation, and
+bounded history under a virtual clock.

@@ -12,6 +12,7 @@ caller.
 - [Defaults](#defaults)
 - [Advanced options](#advanced-options)
 - [Lifecycle and cancellation](#lifecycle-and-cancellation)
+- [Flush triggers](#flush-triggers)
 - [Composition](#composition)
 - [Invariants](#invariants)
 - [Events and metrics](#events-and-metrics)
@@ -184,6 +185,7 @@ that item must not run at all, even if it still physically resides in the queue
 | Option | Shape | Effect |
 | --- | --- | --- |
 | Keyed correlation | key selector | Reordered or partial outcome handling |
+| Manual flush | method | Close the current batch now, as a barrier ([flush triggers](#flush-triggers)) |
 | Batching worker count / sampler | number or `ctx -> number` | Parallel batching groups |
 | Timeout stages | durations | Pre-admission, queue-wait, execution |
 | Overflow = await insertion | enum | Callers wait outside a full queue, uncapped ([D-032](../decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)) |
@@ -207,6 +209,55 @@ that item must not run at all, even if it still physically resides in the queue
 - Execution timeout and caller cancellation both signal the batch function
   through its cancellation parameter. What happens when user code ignores that
   signal is an open item.
+
+## Flush triggers
+
+A batch closes for exactly five reasons, and these are the complete set
+([D-131](../decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown)):
+
+| Trigger | Fires when | Resulting batch |
+| --- | --- | --- |
+| **Max item count** | `maxBatchSize` items are accumulated | Full |
+| **Max weight** | Adding the next item would exceed `maxBatchWeight` | Full, just under the bound ([INV-9](../architecture.md#invariants)) |
+| **Accumulation interval** | The window that began with the first item elapses | Partial, flushed immediately ([D-047](../decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle)) |
+| **Manual flush** | The caller explicitly asks | Partial, whatever is accumulated |
+| **Shutdown** | Drain flushes; cancel-pending cancels ([D-070](../decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending)) | Partial, or nothing |
+
+Max weight applies only to
+[`WeightedAsyncAccumulator`](./weighted-async-accumulator.md). The other four are
+common to both.
+
+```text
+# Batch database writes every 250 ms, but flush immediately at 100 items
+writer = asyncAccumulator({
+  batch: rows => db.bulkInsert(rows),
+  maxBatchSize: 100,
+  accumulationInterval: milliseconds(250),
+})
+
+await writer.flush()      # close the current batch now; await its completion
+```
+
+**Manual flush** is the new capability, and it exists because interval-plus-size
+cannot express "I know there is no more input coming" — end of an HTTP request,
+end of a file, a test asserting a deterministic batch boundary. Its contract:
+
+1. **It closes the current batch immediately** rather than waiting out the window,
+   and the window does not restart until the next item arrives
+   ([D-047](../decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle)).
+2. **It never exceeds a bound.** If more than `maxBatchSize` or `maxBatchWeight`
+   is queued, flush closes as many full batches as the bounds require and one
+   final partial batch.
+3. **Awaiting flush awaits the batch outcomes**, not merely the hand-off, so a
+   caller can use it as a barrier before shutdown.
+4. **Flushing an empty accumulator is a no-op** that completes successfully and
+   invokes no batch function.
+5. **It respects admission, not bypasses it.** Flush closes a batch early; it does
+   not grant the batch function permission it would not otherwise have, and a
+   composed controller still gates the call
+   ([D-041](../decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller)).
+6. **Concurrent flushes coalesce.** Two overlapping flush requests observe the
+   same batch boundary rather than producing two tiny batches.
 
 ## Composition
 

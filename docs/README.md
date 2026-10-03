@@ -1,6 +1,6 @@
-# Limitee Documentation
+# Limitful Documentation
 
-Limitee is a load-leveling toolkit: a bounded job queue, a concurrency-based rate
+Limitful is a load-leveling toolkit: a bounded job queue, a concurrency-based rate
 controller, parallel workers, batching accumulators, and a retry decorator —
 reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 
@@ -25,6 +25,9 @@ reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 | Utility | Document | One-line responsibility |
 | --- | --- | --- |
 | RateController | [utilities/rate-controller.md](./utilities/rate-controller.md) | Hold total in-flight work at or under a hard concurrency ceiling `N` |
+| ThroughputController | [utilities/throughput-controller.md](./utilities/throughput-controller.md) | Limit **when** work may start, and how much time-based quota each start consumes |
+| KeyedControllerRegistry | [utilities/keyed-controller-registry-draft.md](./utilities/keyed-controller-registry-draft.md) | **Draft.** One controller per dynamic key — tenant, API key, IP — with mandatory key bounds |
+| Probe | [utilities/probe.md](./utilities/probe.md) | Periodically read a user measurement function and publish its latest good value |
 | AdaptiveCapacityPolicy | [utilities/adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md) | Opt-in adaptation of effective controller capacity from observed conditions |
 | SynchronizationProvider | [utilities/synchronization-provider.md](./utilities/synchronization-provider.md) | Optionally coordinate compatible utilities across service instances through interchangeable backend providers |
 | GroupedRateController | [utilities/grouped-rate-controller.md](./utilities/grouped-rate-controller.md) | Per-group concurrency limits under one shared global ceiling |
@@ -38,7 +41,8 @@ reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 | Subsystem | Document | One-line responsibility |
 | --- | --- | --- |
 | Queue and admission | [subsystems/queue-and-admission.md](./subsystems/queue-and-admission.md) | The bounded-queue primitive shared by every utility: overflow policy, timeout stages, cancellation |
-| Redis coordination | [subsystems/redis-coordination.md](./subsystems/redis-coordination.md) | Optional cross-process coordination: set-based counting, liveness, fail-open outage behavior, cluster slotting |
+| Shared controller contract | [subsystems/controller-contract.md](./subsystems/controller-contract.md) | **Draft.** The surface shared by every controller: submission, `JobOptions`, advisory admission queries, deadline-aware admission |
+| RedisSynchronizationProvider | [subsystems/redis-coordination.md](./subsystems/redis-coordination.md) | Concrete Redis provider under `SynchronizationProvider`: sets/claims, scripts, liveness, degraded divided-allocation behavior, keys, and cluster slotting |
 | Observability | [subsystems/observability.md](./subsystems/observability.md) | Raw event surface, metrics snapshots, and the optional OpenTelemetry package |
 
 ## Reading paths
@@ -90,3 +94,25 @@ a specification change, not an edit.
   [decisions.md § Unresolved](./decisions.md#unresolved-items).
 - **Illustrative** — any code block in these documents is pseudocode for
   behavior. No public API signature is committed yet.
+- **`-draft` suffix / "Status: draft"** — a document whose direction is accepted
+  but whose names, signatures, and some behaviors are not committed. Draft
+  documents still carry `D-nnn` records and test case IDs; those are the parts
+  that *are* settled.
+
+## Resolved documentation debt
+
+The round-4 consolidation debts are closed:
+
+1. **Canonical name:** `Limitful`
+   ([D-162](./decisions.md#d-162-limitful-is-the-canonical-project-and-library-name)).
+   Historical `Limitee` references remain only in provenance, historical
+   decision text, and explanations of the rename.
+2. **Coordination layering:** the backend-neutral public contract is
+   [`SynchronizationProvider`](./utilities/synchronization-provider.md);
+   [`RedisSynchronizationProvider`](./subsystems/redis-coordination.md) is one
+   concrete provider beneath it
+   ([D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
+   [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
+3. **Decision and matrix coverage:** `ThroughputController`,
+   `AdaptiveCapacityPolicy`, `SynchronizationProvider`, and `Probe` now have
+   durable decisions and `TC`, `AC`, `SP`, and `PB` behavioral cases.
