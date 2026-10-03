@@ -9,6 +9,8 @@ both built on it.
 
 - [Scope](#scope)
 - [Public behavior](#public-behavior)
+- [JavaScript worker-thread execution](#javascript-worker-thread-execution)
+- [JavaScript prior art](#javascript-prior-art)
 - [Worker lifecycle](#worker-lifecycle)
 - [Sampling and scaling](#sampling-and-scaling)
 - [Defaults](#defaults)
@@ -51,6 +53,89 @@ Each worker runs a long-lived loop: take work, do work, repeat. Workers are
 interchangeable; distribution is "whichever worker is free takes the next item",
 not a partitioned assignment.
 
+## JavaScript worker-thread execution
+
+The JavaScript binding's parallel execution mode uses Node.js worker threads or
+browser Web Workers. The pool manager owns scheduling, scaling, lifecycle,
+metrics, cancellation, and result correlation; a worker owns execution of one
+configured task. This gives CPU-bound JavaScript real parallelism without making
+every caller manage a worker pool.
+
+### Worker tasks are modules, not closures
+
+An arbitrary JavaScript callback cannot cross into a worker: a worker has a
+separate JavaScript environment, module cache, and heap. A task is therefore a
+worker-loadable module plus a named exported handler. Its inputs and outputs must
+cross the boundary as serializable values. The pool returns each result to the
+submission that caused it; completion events and metrics supplement that result,
+not replace it.
+
+The task module may import its normal dependencies. Each worker loads that module
+and its dependency graph once at startup, then reuses the loaded handler for many
+jobs. Modules and normal in-memory objects are private to each worker; only
+explicit messages, transferred buffers, or shared raw memory cross the boundary.
+
+This keeps the simple experience honest: callers define a task, wrap it with a
+pool, and submit serializable inputs. The pool owns the difficult parts—worker
+creation, dispatch, delay, scaling, cancellation, metrics, and returning results.
+
+### Packaging by environment
+
+| Environment | Task packaging rule |
+| --- | --- |
+| Plain Node.js / TypeScript | Compile the task module with the application. The worker loads its compiled entry module through Node's normal module loader; Docker images ship that output and its ordinary dependencies. No runtime TypeScript compiler, virtual file system, or `eval` is required. |
+| Browser / React | An environment adapter gives the bundler a worker entry module. The bundler emits the task's dependency graph using its normal worker support. |
+| Optional tooling | A future first-party CLI or bundler plugin may generate task entries and manifests from marked exports. It is ergonomic sugar, not a requirement of the core API. |
+
+The core API must not promise extraction of arbitrary inline callbacks. In
+particular, a closure that captures local variables cannot be made worker-loadable
+without changing those captured values into explicit task input or state.
+
+### State snapshots and custom control messages
+
+Workers must not read `window`, process globals, or mutable module state as if it
+were shared. Instead, a caller may provide a state-reader function in the owning
+JavaScript environment. Limitful invokes it, serializes its result, and sends a
+versioned state snapshot through the pool's control channel to each worker.
+
+Each task receives the latest snapshot that its worker has applied in its execution
+context. State updates apply **between jobs**, never by mutating the context of a
+running task. For a job that requires the exact latest state, the manager sends a
+fresh snapshot with that job; this explicit consistency option costs an additional
+state read and message.
+
+The same control channel carries user-defined serializable events, configuration
+updates, cancellation, progress, and results. Shared memory is an advanced option
+for large, high-frequency raw data only; it cannot contain functions, closures,
+classes, or ordinary JavaScript module state.
+
+### Performance boundary
+
+Worker-thread execution is for CPU-bound task bodies. It does not improve ordinary
+asynchronous I/O, and tiny tasks can cost more in serialization and messaging than
+they gain from parallel execution. The pool therefore keeps task code loaded per
+worker and sends only job data and state updates at runtime. Rust or WebAssembly
+may accelerate CPU-heavy algorithms within a task, but they do not make arbitrary
+JavaScript callbacks transferable or parallel by themselves.
+
+## JavaScript prior art
+
+These libraries are **references for API and lifecycle design**, not required
+Limitful dependencies. Their trade-offs are useful evidence for the JavaScript
+binding's worker-task boundary.
+
+| Library | What to study | Relevance to Limitful |
+| --- | --- | --- |
+| [Piscina](https://github.com/piscinajs/piscina) | Node worker-thread pools, module-backed default and named handlers, promise results, cancellation, backpressure, pool timing, and broadcast messages | The closest Node reference. Its separate worker-module and returned-result model validates Limitful's task descriptor, while Limitful retains its own portable lifecycle contract. |
+| [Comlink](https://github.com/GoogleChromeLabs/comlink) | RPC over `postMessage`, proxy-shaped remote APIs, and transferable-value handling | A browser-focused reference for the control channel: state updates, progress, and custom messages should feel like deliberate asynchronous RPC, not ad-hoc event plumbing. It is not a worker pool. |
+| [workerpool](https://github.com/josdejong/workerpool) | One pool abstraction across Node and browsers, explicit worker scripts, task execution, and embedded-worker trade-offs | Useful for comparing a cross-runtime surface. Its dynamic and embedded-worker options demonstrate convenience paths that Limitful must keep separate from the reliable module-task contract. |
+| [@koale/useworker](https://useworker.js.org/) | React hook ergonomics: a function that runs in a worker plus status and termination controls | Likely the hook considered during design. Its simple hook/controller shape is good UI inspiration, but its pure-function and dependency constraints reinforce why Limitful's core cannot promise arbitrary closure extraction. |
+
+When designing the JavaScript surface, prefer the durable lessons shared by these
+libraries: explicit task identity, promise-correlated results, bounded queues,
+clear cancellation/lifecycle, and a first-class control channel. Do not inherit
+their environment-specific packaging mechanisms into the cross-language core.
+
 ## Worker lifecycle
 
 A worker moves through explicit states. There is no transition back from
@@ -69,7 +154,6 @@ stateDiagram-v2
   Working --> Faulted: task threw
 
   Faulted --> Idle: failure isolated, worker keeps looping
-  Faulted --> Draining: failure policy retires this worker
 
   Idle --> Draining: scale down decision
   Working --> Draining: scale down decision
