@@ -661,6 +661,10 @@ All timing and timeout cases use a virtual monotonic clock and manual scheduler.
 | PB-012 | Default `historyCapacity = 1` retains only the latest successful value | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
 | PB-013 | Configured history capacity `N` retains at most the latest `N` successful values under repeated refreshes | [D-168](./decisions.md#d-168-probe-retains-the-latest-successful-value-with-freshness-metadata) | Ready |
 | PB-014 | A non-positive refresh interval or history capacity fails construction with an actionable message | [design-principles.md](./design-principles.md#error-handling) | Ready |
+| PB-015 | A ProbeFactory shares one due-time scheduler across its created probes while each probe retains independent snapshots and freshness | [D-177](./decisions.md#d-177-probefactory-shares-due-time-scheduling-across-probes) | Ready |
+| PB-016 | Different, jittered, and dynamically changed intervals schedule by earliest next due time rather than an LCM/GCD timing grid | [D-177](./decisions.md#d-177-probefactory-shares-due-time-scheduling-across-probes) | Ready |
+| PB-017 | With the default unlimited factory cap, every due probe may begin immediately, while no individual probe overlaps its own measurement | [D-177](./decisions.md#d-177-probefactory-shares-due-time-scheduling-across-probes) | Ready |
+| PB-018 | With a finite factory cap, excess due probes wait for capacity and coalesce missed intervals into one later refresh | [D-177](./decisions.md#d-177-probefactory-shares-due-time-scheduling-across-probes) | Ready |
 
 ## Cross-language parity process
 

@@ -1465,6 +1465,26 @@ The former worker-supervision and replacement test cases are retired. A defect t
 escapes the internal loop is an implementation defect, not a caller-configurable
 runtime policy.
 
+### D-177 ProbeFactory shares due-time scheduling across probes
+
+**Status:** Accepted · **Source:** User decision
+
+**Decision.** `Probe<T>` may receive a scheduler that decides when its refresh
+may begin. Standalone probes use a private scheduler. `ProbeFactory` creates a
+managed collection of probes using one shared, next-due-time scheduler; it does
+not use an LCM/GCD timing grid. Each probe retains its independent measurement,
+snapshot, freshness, and single-active-refresh guarantee.
+
+`ProbeFactory.maxConcurrentRefreshes` is unlimited by default. Callers may set a
+finite positive cap to limit simultaneous refreshes across the factory. A due
+probe delayed by that cap coalesces missed intervals into one later refresh.
+
+**Consequences.** Many explicitly managed probes share timer and execution
+infrastructure without changing standalone `Probe<T>` behavior. The factory owns
+timing; `ParallelWorkers` may provide bounded execution for due refreshes but
+does not own their clock. A generic scheduler utility remains deferred until a
+second consumer requires the same contract.
+
 ## Superseded and rejected
 
 Preserved deliberately. These are the readings and alternatives that were

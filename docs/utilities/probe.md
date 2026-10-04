@@ -59,6 +59,57 @@ The scheduler uses a monotonic clock and one next-refresh wake-up. The user func
 
 ParallelWorkers may host many independent probes efficiently, but it must not make one probe run its measurement concurrently unless a future explicit multi-reader feature defines how values are combined.
 
+## ProbeFactory and shared scheduling
+
+A `Probe<T>` may receive a **scheduler** option that decides when a refresh may
+begin. The default scheduler is private to that probe and preserves standalone
+behavior. A `ProbeFactory` creates several probes with one shared scheduler, so a
+large managed collection does not require one timer loop per probe
+([D-177](../decisions.md#d-177-probefactory-shares-due-time-scheduling-across-probes)).
+
+`ProbeFactory` is a creation and lifecycle owner, not an aggregation system: its
+probes retain their own measurement functions, snapshots, freshness rules,
+failure metadata, and read APIs. It only shares scheduling and optional execution
+concurrency beneath them.
+
+### Due-time algorithm
+
+The shared scheduler tracks each created probe's next due instant and waits only
+until the earliest one. When one or more probes become due, it refreshes those
+probes and calculates their following due instants. It does **not** compute an
+LCM/GCD timing grid: arbitrary intervals, jitter, and dynamic probe creation
+would make a common grid either impractically coarse or needlessly frequent.
+
+Creation, removal, interval changes, and explicit start/stop update the due-time
+schedule directly. Every probe still allows at most one active measurement. If an
+interval elapses while that probe is already refreshing, the existing missed-tick
+coalescing rule applies unchanged.
+
+### Shared refresh concurrency
+
+`ProbeFactory.maxConcurrentRefreshes` limits refreshes across its probes. Its
+default is **unlimited**, so all probes that are due may begin immediately. A
+caller may set any finite positive cap to protect a shared downstream dependency.
+
+When the cap is reached, a due probe remains due until capacity is available; it
+does not accumulate one refresh request per missed interval. The first eligible
+refresh runs once, then its normal interval is recalculated. This keeps deferred
+work bounded by the probes the factory already owns and preserves every probe's
+one-active-measurement invariant.
+
+`ParallelWorkers` may execute refreshes that the scheduler has declared due, but
+it is not the scheduler: the factory owns due-time calculation and coalescing,
+while ParallelWorkers provides bounded concurrent execution when a finite cap is
+configured.
+
+### Factory boundaries
+
+The factory addresses timer and downstream-call pressure for an explicitly managed
+collection. It does not make an unbounded caller-created population safe by
+itself; callers remain responsible for probe membership and lifecycle. A generic
+scheduling utility is deliberately deferred until a second non-Probe consumer
+needs the same due-time contract.
+
 ## Freshness and health checks
 
 Refresh interval and freshness allowance are distinct. A probe may refresh every five seconds while a health check accepts its latest successful value for fifteen seconds. A transient failure therefore does not erase useful data, but prolonged staleness is observable.
@@ -77,6 +128,10 @@ Ordinary use needs only the function and interval. The first refresh begins imme
 
 Advanced options may add an injected monotonic clock/scheduler, explicit freshness allowance, explicit start/stop, success/failure callbacks, failure classifier or fallback value, custom refresh timeout, optional jitter, and numeric `historyCapacity`. `historyCapacity` retains the latest `N` successful values and is always bounded; its default is `1`. No histogram, percentile calculation, or telemetry exporter belongs here.
 
+For a factory-created probe, the advanced `scheduler` option is supplied by the
+factory. `ProbeFactory` additionally accepts `maxConcurrentRefreshes`, which is
+unlimited by default and may be set to a finite positive cross-probe limit.
+
 ## Relationship to controllers
 
 Controllers may receive a `Probe<T>` only as an optional read-only source. For example, `DefaultOverclockPolicy` can read a probed health or saturation value without invoking its measurement function or waiting in a controller hot path. Probe remains independent and usable without any controller across C#, TypeScript, Rust, Go, and Python.
@@ -84,5 +139,5 @@ Controllers may receive a `Probe<T>` only as an optional read-only source. For e
 ## Test coverage
 
 Case IDs `PB-xxx` in [testing.md § Probe](../testing.md#probe-pb) cover
-last-known-good retention, freshness, serial refresh, timeout/cancellation, and
-bounded history under a virtual clock.
+last-known-good retention, freshness, serial refresh, timeout/cancellation,
+bounded history, and factory scheduling under a virtual clock.
