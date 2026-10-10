@@ -26,7 +26,7 @@ row counts, credits — so that "100 items per batch" is the wrong bound.
 | --- | --- |
 | The user weight function and when it runs | The true-batch-function contract ([D-040](../decisions.md#d-040-asyncaccumulator-invokes-one-true-batch-function-per-batch)) |
 | Weight-budgeted batch admission | Outcome correlation and its contract violations ([D-042](../decisions.md#d-042-outcome-correlation-is-positional-by-default-keyed-is-advanced)) |
-| The strict/flexible over-max policy | The three timeout stages ([D-035](../decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage)) |
+| The strict/flexible over-max policy | Per-item and batch timeout/cancellation outcomes ([D-187](../decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects)) |
 | Atomicity of the weight check and admission | The batching-worker lifecycle ([D-046](../decisions.md#d-046-batching-runs-on-parallelworkers-with-no-fixed-cadence)) |
 | | Queue bounding, overflow, cancellation |
 
@@ -164,6 +164,11 @@ with two additions:
   ([INV-7](../architecture.md#invariants)).
 - Drain flushes carried-over items as further batches rather than discarding them
   ([INV-1](../architecture.md#invariants)).
+
+The optional controller injection and once-per-affected-batch compensation
+contract are inherited unchanged
+([D-180](../decisions.md#d-180-accumulators-accept-an-optional-controller),
+[D-188](../decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch)).
 
 ## Composition
 

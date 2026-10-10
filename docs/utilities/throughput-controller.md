@@ -31,6 +31,7 @@ independent and follow Limitful's own reliability and portability principles.
 - [Responsibility and boundaries](#responsibility-and-boundaries)
 - [Terminology](#terminology)
 - [Simple public behavior](#simple-public-behavior)
+- [Throughput strategies](#throughput-strategies)
 - [Start eligibility and accounting](#start-eligibility-and-accounting)
 - [Optional minimum spacing and smooth pacing](#optional-minimum-spacing-and-smooth-pacing)
 - [Quota and reservoir behavior](#quota-and-reservoir-behavior)
@@ -105,17 +106,17 @@ conservative: a job may start late, never early.
 
 > Illustrative pseudocode. Names and signatures are not committed.
 
-The beginner path has exactly two required inputs across its normal use: the
-throughput rate at construction and the function to run at submission. No queue
-size, timeout, quota, priority, clock, scheduler, worker, saturation value, or
-adapter is required to get a complete working controller. Every other behavior
-has a documented safe default. Advanced behavior is opt-in through named
-options or functional injection, so the common path remains fully functional
-without configuration ceremony.
+The beginner path supplies a throughput limit, selects one shipped strategy, and
+submits a function. No queue size, timeout, priority, clock, scheduler, worker,
+saturation value, or adapter is required. Advanced behavior remains opt-in.
 
 ```text
-# Level 0 — one required rate and safe defaults
-controller = throughputController({ credits: 100, per: seconds(1) })
+# Level 0 — one rate and one shipped strategy
+controller = throughputController({
+  credits: 100,
+  per: seconds(1),
+  strategy: fixedWindow(),
+})
 
 result = await controller.run(() => callApi())
 limitedCall = controller.wrap(callApi)
@@ -124,6 +125,7 @@ limitedCall = controller.wrap(callApi)
 controller = throughputController({
   credits: 100,
   per: seconds(1),
+  strategy: fixedWindow(),
   maxQueued: 1024,
   minimumStartSpacing: milliseconds(10),
 })
@@ -132,6 +134,7 @@ controller = throughputController({
 controller = throughputController({
   credits: 100,
   per: seconds(1),
+  strategy: tokenBucket(),
   quota: refill({ capacity: 500, amount: 100, every: seconds(1) }),
   cost: item => item.requestUnits,
   priority: item => item.priority,
@@ -141,25 +144,8 @@ controller = throughputController({
 })
 ```
 
-The proposed simple meaning of `100 credits per second` is a **fixed-window
-allowance**: up to 100 cost-one starts may be released in each second, including
-as a burst when a queued peak arrives or a new window opens. This favors a simple
-default and fast peak handling. It is not a promise of even spacing.
-
-Optional smoothing lets a caller limit starts within smaller sub-windows or set
-an explicit minimum start spacing (for example, roughly one cost-one start every
-10 ms for 100 per second). Smoothing is an advanced traffic-shaping choice for a
-downstream service that benefits from steadier arrivals; it must not silently
-change the default burst allowance.
-
-Unused credits in the default fixed window expire at that window's boundary.
-They do not carry forward or enlarge a later burst. Callers that need stored
-allowance use the explicit quota/reservoir configuration instead.
-
-The first submitted task starts the controller's first default window on the
-monotonic clock. Subsequent windows advance by that configured period; they are
-not aligned to wall-clock seconds. The first eligible task may start immediately
-within that first window.
+No shipped strategy is designated as the default. The selected strategy owns the
+meaning of windows, refill, bursts, and unused capacity.
 
 Every submission returns one promise/task/future for the operation's **eventual
 terminal outcome**. The controller is transparent: awaiting `run` observes the
@@ -173,6 +159,24 @@ unobserved-failure rules.
 An explicit quota is the mechanism for callers who need a stored allowance,
 bursts, periodic resets, or refills. Pacing and quota can be enabled together;
 the stricter constraint wins for every start.
+
+## Throughput strategies
+
+The caller selects one strategy shipped by Limitful
+([D-178](../decisions.md#d-178-throughputcontroller-ships-caller-selected-throughput-strategies)):
+
+| Strategy | Contract level |
+| --- | --- |
+| Fixed window | Counts permitted starts or credit cost within discrete windows |
+| Sliding window | Measures the applicable credit cost across a moving time window |
+| Token bucket | Admits work by spending replenished tokens |
+
+These are distinct strategy choices, not aliases and not a hidden fixed-window
+default. This consolidated decision does not define their portable algorithms or
+public option shapes, and this document does not infer them.
+
+**Open:** whether callers may supply a custom strategy in addition to the three
+shipped strategies.
 
 ## Shared controller contract
 
@@ -215,7 +219,7 @@ A job may launch only when every enabled gate permits it:
 ```mermaid
 flowchart TD
   SUB["Submit job"] --> CAP{"Queue has capacity?"}
-  CAP -->|"no"| OVF["Reject or await insertion"]
+  CAP -->|"no"| OVF["Reject or wait"]
   CAP -->|"yes"| ENQ["Enqueue immutable job envelope"]
   OVF -->|"space becomes available"| ENQ
   ENQ --> WAKE["Wake the scheduler"]
@@ -262,9 +266,8 @@ lateness. It does **not** replay every missed pacing tick and create a catch-up
 burst. If the event loop wakes late, throughput is lower for that interval rather
 than temporarily exceeding the configured pace.
 
-The default fixed-window mode leaves smoothing disabled and allows its configured
-burst. A caller explicitly enables smoothing when it needs steadier starts;
-enabling it must not add stored credit or change the configured window allowance.
+Smooth pacing and minimum spacing are explicit traffic-shaping options. They do
+not select or replace the configured throughput strategy.
 
 ## Quota and reservoir behavior
 
@@ -277,9 +280,8 @@ balance, a finite capacity, and one replenishment mode.
 | **Refill** | Add a configured amount each interval, capped at capacity |
 | **Reset** | Replace the balance with a configured amount at each boundary; unused quota is discarded |
 
-All three modes are supported in advanced quota configuration. They remain
-separate from the simple fixed-window-credit default so ordinary users do not
-need to reason about reservoir behavior.
+All three modes are supported in advanced quota configuration and remain
+separate from the selected throughput strategy.
 
 Refill and reset intervals are anchored explicitly. The proposed local default
 is the controller's activation time on the monotonic clock. Wall-clock-aligned
@@ -397,8 +399,10 @@ start, it may fail that job early rather than arm a useless timer.
 - when the queue has capacity, submission always enqueues first and the central
   scheduler releases the item at its calculated pace; there is no separate
   "run now or reject" admission path based on current rate availability;
-- await-insertion is an explicit advanced mode whose external waiters are the
-  caller's responsibility;
+- wait is an explicit advanced mode with a configured waiting-caller capacity;
+  when both bounds are full the preferred default is rejection, while explicit
+  unbounded waiting gives up the memory guarantee
+  ([D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room));
 - an accepted queued job is never evicted to admit newer work;
 - cancellation or queue-wait expiry guarantees the job never starts later; and
 - every accepted job reaches exactly one announced terminal outcome.
@@ -408,10 +412,10 @@ cancellation wins before commit and no credit is spent, or launch wins and the
 job is treated as started. Runtime channel behavior or `select` ordering must not
 silently choose different semantics per language.
 
-Once execution begins, cancellation is cooperative. If user code ignores the
-signal, the controller cannot safely claim that physical work stopped. The
-snapshot should distinguish logical terminal outcomes from currently observed
-executions if those can diverge.
+Once execution begins, caller cancellation does not stop physical work.
+Cancellation wins the caller's eventual outcome; the function continues to
+return, and its eventual value or failure is discarded
+([D-182](../decisions.md#d-182-queued-cancellation-wins-the-caller-outcome-without-stopping-running-work)).
 
 ## Adaptive saturation and temporary overclock
 
@@ -823,18 +827,17 @@ shared queue or other canonical documents.
 | Option | Proposed default | Reason |
 | --- | --- | --- |
 | Nominal credits and period | Required | They define the utility's purpose |
-| First start | Immediate | No artificial startup latency |
-| Default window anchor | First submitted task | No wall-clock alignment required |
-| Smooth pacing | Disabled | Fixed-window burst is the simple default; enable explicitly for steadier starts |
+| Throughput strategy | Required | Fixed window, sliding window, or token bucket; no default chosen |
+| Smooth pacing | Disabled | Enable explicitly for steadier starts |
 | Catch-up after lateness/idle | Disabled | Never repay missed ticks as a burst |
 | Additional minimum spacing | Disabled | Optional alongside smoothing for stricter shaping |
-| Quota / reservoir | Disabled | Fixed-window credits are the simple path |
+| Quota / reservoir | Disabled | Optional stored allowance |
 | Cost | `1` | One job consumes one credit |
 | Priority | Neutral; FIFO among accepted equal-priority jobs | Predictable simple ordering |
 | Caller-supplied ID | Optional | Internal correlation ID is generated |
 | Stage timeouts | Not configured | Opt-in and stage-specific |
 | `maxQueued` | `1024` draft candidate | Finite, safe-by-default queue; must align with the shared queue decision |
-| Overflow | Reject immediately | Bounded memory; await insertion is advanced |
+| Overflow | Reject immediately | Bounded memory; wait is advanced |
 | Dispatch batch cap | `256` draft candidate | Amortize wake-ups without monopolizing an event loop |
 | Clock / scheduler | System monotonic clock and event-driven scheduler | Portable production behavior; injectable |
 | Adaptive saturation | Off | No hidden policy or sampling work |
@@ -914,20 +917,20 @@ failover, and partition recovery.
 
 ### Core semantics
 
-1. Is smooth credit pacing the accepted meaning of the simple `credits / period`
-   API, and is an implicit burst capacity of one correct?
-2. What are the final public names: credits/period, starts/interval, rate, or
+1. What are the final public names: credits/period, starts/interval, rate, or
    another idiomatic shape per language?
-3. Does weighted cost affect both pacing and quota, as proposed, or quota only?
-4. What exact point is the public "start" boundary when decorators or inner
+2. Does weighted cost affect both pacing and quota, as proposed, or quota only?
+3. What exact point is the public "start" boundary when decorators or inner
    queues are involved?
-5. What portable fixed-point precision, maximum value, and rounding algorithm are
+4. What portable fixed-point precision, maximum value, and rounding algorithm are
    shared across all bindings?
+5. May callers provide a custom throughput strategy in addition to the three
+   shipped strategies?
 
 ### Queue and scheduling
 
 6. Is accepted equal-priority work guaranteed FIFO, separately from the
-   intentionally unordered await-insertion callers?
+   intentionally unordered waiting callers?
 7. When the head job cannot fit current quota but a cheaper job can, does the
    scheduler preserve order or bypass it? What bounded-starvation rule applies?
 8. Are fixed priority bands sufficient, and what aging or weighted-fair policy is
@@ -937,7 +940,7 @@ failover, and partition recovery.
 
 ### Quota and updates
 
-11. Are refill and reset enough, or is continuous token refill also first-class?
+11. What are the portable public options for the shipped token-bucket strategy?
 12. What anchors reset boundaries, and what happens across long process
     suspension or a wall-clock-aligned clock jump?
 13. May manual adjustment deliberately refund credits, and should subtraction

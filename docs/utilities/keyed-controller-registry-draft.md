@@ -205,8 +205,8 @@ and it is not acceptable as an undocumented default. Two things follow
 
 1. **An optional `globalCeiling` across all keys is part of the first version**,
    not a later addition. When set, a submission needs both a per-key slot and a
-   global slot, reusing `GroupedRateController`'s shared-ceiling semantics
-   ([D-062](../decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling)).
+   global slot, reusing `GroupedRateController`'s optional shared-ceiling semantics
+   ([D-186](../decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention)).
 2. **Aggregate exposure is reported in the snapshot** as a computed worst case, so
    the number is visible rather than inferred.
 

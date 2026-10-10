@@ -63,11 +63,14 @@ flowchart TD
   CAP -->|"no"| POL{"Overflow policy"}
 
   POL -->|"reject - default"| FREJ["Fail immediately. The queue never waits for space"]
-  POL -->|"await insertion - advanced"| AW["Wait outside the queue"]
+  POL -->|"wait - advanced"| AW["Wait outside the queue, subject to waiting-caller capacity"]
 
   subgraph Waiters["Admission waiting - advanced mode"]
     AW --> AWEV{"What happens first?"}
     AWEV -->|"space frees"| ADM["Admitted, no FIFO guarantee - D-033"]
+    AWEV -->|"waiting room full"| WOV{"Outer overflow policy"}
+    WOV -->|"reject - preferred default"| WREJ["Fail immediately"]
+    WOV -->|"unbounded wait - explicit"| AW
     AWEV -->|"caller cancels"| ACAN["Removed immediately, guaranteed never to enter - D-034"]
     AWEV -->|"pre-admission timeout expires"| FPRE
   end
@@ -99,29 +102,31 @@ behaviors:
 ### 1. Reject — the default
 
 Insertion **fails immediately**. The queue never waits for space; waiting is
-available only through the explicit await-insertion mode
+available only through the explicit wait mode
 ([D-030](../decisions.md#d-030-a-full-queue-rejects-immediately-by-default)).
 
-This is the default because it is the only option with bounded memory. A friendly
-default that quietly accumulates unbounded waiters would violate the library's
-own safety rule
+This is the default because it avoids admission waiting entirely. Wait mode can
+retain bounded memory through its separate waiting-caller capacity; explicit
+unbounded waiting deliberately gives up that guarantee
 ([design-principles.md § What "simple" costs](../design-principles.md#what-simple-costs)).
 
-### 2. Await insertion — advanced
+### 2. Wait — advanced
 
 New items wait on **admission itself**. Callers hold a number of items pending
 their own insertion, and as the queue drains those items are admitted and
 processed in turn
-([D-031](../decisions.md#d-031-await-insertion-is-the-only-waiting-mode-and-it-is-advanced)).
+([D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room)).
 
 Three properties of this mode are deliberate and must be documented wherever it
 is offered:
 
-- **Waiters are uncapped.** Limitful does **not** cap the number of callers waiting
-  outside a full queue. That memory and backpressure responsibility — including
-  any unbounded set of admission waiters — belongs to the caller, who composes
-  their own upstream controls, such as web-controller or middleware rate limiting
-  ([D-032](../decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)).
+- **Waiting callers have a configurable capacity.** The queue bound and the
+  waiting-caller bound are separate. If both are full, the preferred default is
+  to reject the newcomer.
+- **Unbounded waiting is explicit.** A caller may deliberately allow waiting
+  beyond that cap, but this gives up the controller's memory guarantee and must be
+  documented as an unsafe backpressure choice
+  ([D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room)).
 - **No FIFO guarantee.** Admission order among waiting callers is
   implementation-dependent. Strict FIFO adds unnecessary complexity and is not
   required ([D-033](../decisions.md#d-033-no-fifo-guarantee-for-admission-waiters)).
@@ -162,7 +167,7 @@ Cancellation is terminal everywhere ([INV-5](../architecture.md#invariants)) and
 | --- | --- |
 | Awaiting insertion | Pending request removed; guaranteed never to enter the queue ([D-034](../decisions.md#d-034-cancellation-while-awaiting-insertion-is-immediate-and-final)) |
 | Queued | Item removed; guaranteed never to execute, even while it still physically resides in the queue ([D-037](../decisions.md#d-037-a-cancelled-item-never-runs)) |
-| Executing | Cancellation is signalled to the running function |
+| Executing | Physical work runs to completion. Cancellation wins the caller's eventual outcome, and the eventual work result is discarded ([D-182](../decisions.md#d-182-queued-cancellation-wins-the-caller-outcome-without-stopping-running-work)) |
 | Under retry backoff | Terminal; no further attempts ([INV-5](../architecture.md#invariants)) |
 
 **Open item.** The atomic race rules when cancellation or timeout and the
@@ -192,14 +197,16 @@ Until they are, a binding must at minimum guarantee that the item resolves
 | Pre-admission timeout | Not configured | Optional stage |
 | Queue-wait timeout | Not configured | Optional stage |
 | Execution timeout | `Undecided` | Open |
-| Waiter cap in await-insertion mode | None, by design | ([D-032](../decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)) |
+| Waiting-caller capacity | Configurable | Separate from queue capacity ([D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room)) |
+| Outer overflow when queue and waiting room are full | Reject preferred | Explicit unbounded waiting is available with a memory warning |
 | Admission order among waiters | Unspecified | ([D-033](../decisions.md#d-033-no-fifo-guarantee-for-admission-waiters)) |
 
 ## Advanced options
 
 | Option | Shape | Effect |
 | --- | --- | --- |
-| Overflow policy | enum | Reject, or await insertion |
+| Overflow policy | enum | Reject, or wait |
+| Waiting-caller capacity and outer overflow | number and enum | Bound callers outside the queue; reject or explicitly allow unbounded waiting when full |
 | The three timeout stages | durations | Independent per stage |
 | Max queued | number | Capacity bound |
 | Clock / scheduler | injected | Deterministic timeout tests ([D-103](../decisions.md#d-103-the-clock-is-public-api)) |
@@ -228,7 +235,7 @@ Every utility that owns a queue must pass the `QA` suite against its own surface
 
 | Item | Status |
 | --- | --- |
-| **Exactly which utilities inherit** reject-by-default, uncapped waiters, implementation-dependent waiter ordering, and the cancellation rules | Not decided. The working assumption is *all of them*, since the queue is one primitive, but it has not been stated ([D-031](../decisions.md#d-031-await-insertion-is-the-only-waiting-mode-and-it-is-advanced)) |
+| Utilities beyond `RateController` and `ThroughputController` that expose the controller-style wait mode | Not decided. Both controllers are explicitly covered by [D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room) |
 | Disposition of callers awaiting insertion when shutdown begins | Not decided ([D-070](../decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending)) |
 | Atomic race rules between timeout/cancellation and the execution claim or admission | Not decided ([D-034](../decisions.md#d-034-cancellation-while-awaiting-insertion-is-immediate-and-final)) |
 | Default max queued, and default execution timeout | Not decided. Surfaced during consolidation |

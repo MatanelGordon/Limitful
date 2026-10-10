@@ -306,7 +306,7 @@ suite against a real cluster as a technical test.
 | --- | --- |
 | The non-frozen membership policy and which policy is the default | Not decided ([D-084](../decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined)) |
 | Whether the membership set and the last-seen key co-locate under one hash tag | Not decided, pending the final counting mechanism ([D-087](../decisions.md#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix)) |
-| How `N` is divided across processes, including integer remainders and whether every process may round up | Not decided. Related to grouped allocation normalization ([grouped-rate-controller.md](../utilities/grouped-rate-controller.md#open-items)) |
+| How `N` is divided across processes, including integer remainders and whether every process may round up | Not decided |
 | The exact adapter interface, including how multi-key and scripted operations are expressed across clients | Not decided. Surfaced during consolidation |
 | Default key prefix, heartbeat interval, and staleness threshold | Not decided. Surfaced during consolidation |
 | Whether one Redis provider instance may coordinate several scopes atomically, and how multi-scope operations are ordered | Not decided ([synchronization-provider.md](../utilities/synchronization-provider.md#open-design-questions)) |

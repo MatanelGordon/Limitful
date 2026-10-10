@@ -19,6 +19,7 @@ reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 | [design-principles.md](./design-principles.md) | Simple defaults / advanced opt-in, functional conventions, immutability, policy vs mechanism, composability |
 | [testing.md](./testing.md) | **Source of truth for test behavior**: strategy, test doubles, override points, deterministic time and concurrency, the cross-language test matrix |
 | [decisions.md](./decisions.md) | Consolidated ADR-style decision log, including superseded, rejected, and unresolved items |
+| [site/SPEC.md](./site/SPEC.md) | Canonical documentation-site product, content, routing, offline, search, versioning, and accessibility contract |
 
 ### Utilities
 
@@ -30,7 +31,7 @@ reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 | Probe | [utilities/probe.md](./utilities/probe.md) | Periodically read a user measurement function and publish its latest good value |
 | AdaptiveCapacityPolicy | [utilities/adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md) | Opt-in adaptation of effective controller capacity from observed conditions |
 | SynchronizationProvider | [utilities/synchronization-provider.md](./utilities/synchronization-provider.md) | Optionally coordinate compatible utilities across service instances through interchangeable backend providers |
-| GroupedRateController | [utilities/grouped-rate-controller.md](./utilities/grouped-rate-controller.md) | Per-group concurrency limits under one shared global ceiling |
+| GroupedRateController | [utilities/grouped-rate-controller.md](./utilities/grouped-rate-controller.md) | Per-group concurrency limits with an optional shared global ceiling |
 | ParallelWorkers | [utilities/parallel-workers.md](./utilities/parallel-workers.md) | Run a recurring loop across a dynamically sampled number of workers |
 | AsyncAccumulator | [utilities/async-accumulator.md](./utilities/async-accumulator.md) | Accumulate inputs and invoke one batch function per batch, returning per-input outcomes |
 | WeightedAsyncAccumulator | [utilities/weighted-async-accumulator.md](./utilities/weighted-async-accumulator.md) | AsyncAccumulator with per-item weights and a never-overshoot weight budget |
@@ -42,7 +43,7 @@ reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 | --- | --- | --- |
 | Queue and admission | [subsystems/queue-and-admission.md](./subsystems/queue-and-admission.md) | The bounded-queue primitive shared by every utility: overflow policy, timeout stages, cancellation |
 | Shared controller contract | [subsystems/controller-contract.md](./subsystems/controller-contract.md) | **Draft.** The surface shared by every controller: submission, `JobOptions`, advisory admission queries, deadline-aware admission |
-| RedisSynchronizationProvider | [subsystems/redis-coordination.md](./subsystems/redis-coordination.md) | Concrete Redis provider under `SynchronizationProvider`: sets/claims, scripts, liveness, degraded divided-allocation behavior, keys, and cluster slotting |
+| RedisSynchronizationProvider | [subsystems/RedisSynchronizationProvider.md](./subsystems/RedisSynchronizationProvider.md) | Concrete Redis provider under `SynchronizationProvider`: sets/claims, scripts, liveness, degraded divided-allocation behavior, keys, and cluster slotting |
 | Observability | [subsystems/observability.md](./subsystems/observability.md) | Raw event surface, metrics snapshots, and the optional OpenTelemetry package |
 
 ## Reading paths
@@ -109,7 +110,7 @@ The round-4 consolidation debts are closed:
    decision text, and explanations of the rename.
 2. **Coordination layering:** the backend-neutral public contract is
    [`SynchronizationProvider`](./utilities/synchronization-provider.md);
-   [`RedisSynchronizationProvider`](./subsystems/redis-coordination.md) is one
+   [`RedisSynchronizationProvider`](./subsystems/RedisSynchronizationProvider.md) is one
    concrete provider beneath it
    ([D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
    [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).

@@ -199,6 +199,17 @@ evaluated on a configurable interval
 The function receives a context of metrics and data and returns the desired number
 of active workers at that moment.
 
+Only a valid completed sample may change the worker count
+([D-183](../decisions.md#d-183-invalid-missing-failed-or-timed-out-samples-hold-worker-count)):
+
+- an absent or invalid value is discarded;
+- a thrown error is discarded and emits the ordinary error event;
+- a timed-out sample is discarded; and
+- in every case the current worker count holds until a later valid sample.
+
+The sampler timeout defaults to the sampling interval. A new sample never starts
+while a previous sample is still running, including a sample awaiting timeout.
+
 When a sampler is configured, it runs **immediately when the worker pool first
 starts** by default, before the first sampling interval elapses
 ([D-170](../decisions.md#d-170-parallelworkers-makes-startup-sampling-configurable)).
@@ -247,6 +258,7 @@ overlapping decisions from acting on a count that has not yet become real.
 | Max workers | **Required** | Finite explicit bound; never inferred from CPU capacity ([D-173](../decisions.md#d-173-parallelworkers-requires-an-explicit-maximum-worker-count)) |
 | Sampling function | A fixed count | Absent a sampler, the count does not change |
 | Sampling interval | 1 second | Used when a sampler is supplied; configurable ([D-174](../decisions.md#d-174-parallelworkers-defaults-sampling-to-one-second)) |
+| Sampler timeout | Sampling interval | A timed-out sample holds the current count |
 | Startup sampling | Immediate | May be deferred until after the first full interval |
 | Scaling delta | 1 per sample | ([D-021](../decisions.md#d-021-worker-count-changes-by-one-per-sample-by-default)) |
 | Clock | System clock | Injectable ([D-103](../decisions.md#d-103-the-clock-is-public-api)) |
@@ -258,6 +270,7 @@ overlapping decisions from acting on a count that has not yet become real.
 | --- | --- | --- |
 | Sampling function | `ctx -> number` | Dynamic worker count from live metrics |
 | Sampling interval | duration | Evaluation frequency |
+| Sampler timeout | duration | Bounds one sampler evaluation; evaluations never overlap |
 | Startup sampling | immediate or deferred | Whether the sampler runs at first start or after the first full interval |
 | Max scaling delta | number | More than one change per interval |
 | Min / max workers | numbers | Hard bounds around the sampled value |

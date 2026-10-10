@@ -152,7 +152,8 @@ attempt ([INV-6](../architecture.md#invariants)).
 | Worker-count sampler | `ctx -> number` | Dynamically divides `N`; clamped to `N`. Receives live metrics |
 | Sampling interval | duration | How often the sampler runs |
 | Max scaling delta | number | Allows more than one worker change per sample ([D-021](../decisions.md#d-021-worker-count-changes-by-one-per-sample-by-default)) |
-| Overflow = await insertion | enum | Callers wait outside a full queue; uncapped and the caller's responsibility ([D-032](../decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)) |
+| Overflow = wait | enum | Callers wait outside a full queue under a configured waiting-caller capacity; explicit unbounded waiting gives up the memory guarantee ([D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room)) |
+| Queued-job deduplication | hash/key function | Reject a duplicate queued submission as `AlreadyQueued` ([D-184](../decisions.md#d-184-optional-queued-job-deduplication-rejects-duplicates)) |
 | Timeout stages | durations | Pre-admission, queue-wait, execution |
 | Clock / scheduler | injected | Deterministic tests, custom time sources |
 | Synchronization provider | injected | Cross-process shared ceiling ([SynchronizationProvider](./synchronization-provider.md#ratecontroller)) |
@@ -176,6 +177,9 @@ attempt ([INV-6](../architecture.md#invariants)).
   current job first ([D-022](../decisions.md#d-022-workers-drain-gracefully-and-are-never-revived)).
 - **Cancelling a submitted job** before it starts removes it and guarantees it
   never executes later ([INV-7](../architecture.md#invariants)).
+- **Cancelling after execution starts** wins the caller's eventual outcome, lets
+  physical work complete, and discards the eventual result
+  ([D-182](../decisions.md#d-182-queued-cancellation-wins-the-caller-outcome-without-stopping-running-work)).
 - **Timeout stages** are owned by the queue primitive and are distinct per stage
   ([D-035](../decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage)).
 - **Nothing survives process exit**
@@ -238,4 +242,4 @@ behavior by `PW-xxx`.
 | ~~Whether a separate **per-second rate limiter** utility is built~~ | **Resolved:** it is [`ThroughputController`](./throughput-controller.md), a peer utility with its own document ([S-010](../decisions.md#s-010-a-per-second-limiter-is-merely-under-consideration)) |
 | The bounded-starvation rule that would unblock weighted concurrency `cost` | Not decided ([D-116](../decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)) |
 | Whether `estimatedStartAt` accepts a caller-supplied duration estimator | Not decided ([controller-contract.md](../subsystems/controller-contract.md#open-items)) |
-| How `N` is divided across processes in distributed mode, including remainders | Not decided; related to grouped allocation normalization ([grouped-rate-controller.md](./grouped-rate-controller.md#open-items)) |
+| How `N` is divided across processes in distributed mode, including remainders | Not decided; owned by the synchronization provider and concrete provider contract |

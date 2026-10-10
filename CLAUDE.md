@@ -33,8 +33,9 @@ and the disagreement is a bug in this file.
 | SynchronizationProvider — cross-instance coordination and capabilities | [docs/utilities/synchronization-provider.md](./docs/utilities/synchronization-provider.md) |
 | Probe — periodic measurement with freshness metadata | [docs/utilities/probe.md](./docs/utilities/probe.md) |
 | Queue, overflow, timeout stages, cancellation | [docs/subsystems/queue-and-admission.md](./docs/subsystems/queue-and-admission.md) |
-| RedisSynchronizationProvider mechanics, liveness, outage behavior | [docs/subsystems/redis-coordination.md](./docs/subsystems/redis-coordination.md) |
+| RedisSynchronizationProvider mechanics, liveness, outage behavior | [docs/subsystems/RedisSynchronizationProvider.md](./docs/subsystems/RedisSynchronizationProvider.md) |
 | Events, metrics, the optional OTel package | [docs/subsystems/observability.md](./docs/subsystems/observability.md) |
+| Documentation site contract | [docs/site/SPEC.md](./docs/site/SPEC.md) |
 
 `Q&A-Round-3.md` is the raw grooming transcript, kept for provenance. Its
 decisions are consolidated in [docs/decisions.md](./docs/decisions.md); cite the
@@ -49,7 +50,7 @@ supervision → outcome classification.
 `Limitful` ([D-162](./docs/decisions.md#d-162-limitful-is-the-canonical-project-and-library-name)).
 Controllers depend on the backend-neutral
 [`SynchronizationProvider`](./docs/utilities/synchronization-provider.md);
-[`redis-coordination.md`](./docs/subsystems/redis-coordination.md) is the concrete
+[`redis-coordination.md`](./docs/subsystems/RedisSynchronizationProvider.md) is the concrete
 Redis provider's technical deep dive, not a competing public contract
 ([D-163](./docs/decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
 [D-164](./docs/decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
@@ -59,10 +60,11 @@ Redis provider's technical deep dive, not a competing public contract
 **Simple defaults and an easy first use; advanced behavior through explicit
 options, properties, and function injection.**
 
-- A first-time user supplies one value — the limit — and gets correct, safe
-  behavior. Nothing else is required.
-- **Every behavior and value has a default.** A knob with no defensible default is
-  a design problem with the knob, not a reason to require it.
+- A first-time user supplies the defining limit and gets correct, safe behavior.
+  `ThroughputController` additionally requires the caller to select one shipped
+  throughput strategy; no default strategy has been invented.
+- **Every optional behavior and value has a default.** A knob with no defensible
+  default is a design problem with the knob, not a reason to require it.
 - **Defaults must stay safe, understandable, and ergonomic**, in that order. Safe
   means it cannot silently lose work or silently exceed a limit.
 - **Never turn an advanced capability into required configuration.** Adding a
@@ -110,6 +112,13 @@ Functional first, objects only where a lifetime must be owned and disposed.
   ([D-114](./docs/decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent)).
 - **Validate configuration at construction** with actionable messages.
 - `Attempts`, never `Retries` — and it includes the initial execution.
+- Expected outcomes use semantic library errors in a `Result`/value-or-error form
+  by default; throwing or unwrapping is explicit.
+- Controller wait mode has a configurable waiting-caller capacity. Explicit
+  unbounded waiting gives up the memory guarantee.
+- Accumulators may receive an optional shared-contract controller; per-item
+  signals never cancel a running batch, and configured compensation is awaited
+  during disposal.
 - C# and Rust use functional constructs and current language features: records,
   immutable data, union-style results, exhaustive matching.
 

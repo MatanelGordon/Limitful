@@ -13,7 +13,8 @@ limiter for C#, TypeScript, Rust, Go, and Python.
 | Utility | What it does |
 | --- | --- |
 | **RateController** | Holds total in-flight work at or under a hard concurrency ceiling, pulling from a bounded queue as slots free |
-| **GroupedRateController** | Per-group concurrency limits under one shared global ceiling |
+| **ThroughputController** | Applies caller-selected fixed-window, sliding-window, or token-bucket throughput limits |
+| **GroupedRateController** | Per-group concurrency limits with an optional shared global ceiling |
 | **ParallelWorkers** | Runs a recurring loop across a dynamically sampled number of workers |
 | **AsyncAccumulator** | Accumulates inputs and invokes one batch function per batch, returning per-input outcomes |
 | **WeightedAsyncAccumulator** | The same, budgeted by per-item weight instead of item count |
@@ -32,6 +33,7 @@ Start at **[docs/README.md](./docs/README.md)** — the documentation index and 
 | [docs/design-principles.md](./docs/design-principles.md) | Simple defaults with advanced opt-in, functional conventions, policy vs mechanism |
 | [docs/testing.md](./docs/testing.md) | The source of truth for test behavior, including the cross-language test matrix |
 | [docs/decisions.md](./docs/decisions.md) | Consolidated decision log, with superseded, rejected, and unresolved items |
+| [docs/site/SPEC.md](./docs/site/SPEC.md) | Canonical documentation-site contract |
 | [docs/utilities/](./docs/utilities/) | One focused design document per utility |
 | [docs/subsystems/](./docs/subsystems/) | Queue and admission, Redis coordination, observability |
 
@@ -40,11 +42,11 @@ working conventions.
 
 ## Design in one paragraph
 
-Limitful limits by **concurrency**, not by time windows. Every queue is bounded,
-and a queued job is never dropped unannounced. Defaults are safe and require
-almost no configuration; every advanced behavior — scaling policy, retry
-predicates, backoff, weights, group routing, the clock, the Redis client — is
-injected as a function or an explicit option. Each language gets a full native
+`RateController` limits by **concurrency**, not by time windows.
+`ThroughputController` separately limits starts over time through a
+caller-selected fixed-window, sliding-window, or token-bucket strategy. Every
+queue is bounded, and queued work is never dropped unannounced. Defaults are safe
+and advanced behavior is explicit. Each language gets a full native
 implementation with an idiomatic surface and identical observable behavior.
 
 ## License

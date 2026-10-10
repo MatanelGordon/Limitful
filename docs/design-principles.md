@@ -4,6 +4,10 @@ Limitful has one organizing rule: **the easy thing must be easy, and the hard
 thing must be possible without forking the library.** Everything below is a
 consequence of that rule.
 
+In short, each feature is a straightforward utility at first use and a utility
+"on steroids" when the caller opts into its deeper controls
+([D-102](./decisions.md#d-102-progressive-disclosure-sensible-defaults-advanced-opt-in)).
+
 - [Progressive disclosure](#progressive-disclosure)
 - [Policy versus mechanism](#policy-versus-mechanism)
 - [Public override points](#public-override-points)
@@ -42,8 +46,10 @@ limiter = rateController({
 
 Rules that keep this honest:
 
-1. **Every value and behavior has a default.** If a knob has no sensible default,
-   that is a design problem with the knob, not a reason to require it.
+1. **Every optional value and behavior has a default.** Defining inputs such as a
+   limit, a batch function, or `ThroughputController` strategy may be required.
+   If an optional knob has no sensible default, that is a design problem with the
+   knob, not a reason to require it.
 2. **Defaults must be safe, understandable, and ergonomic** — in that order. Safe
    means it cannot silently lose work or silently exceed a limit. Understandable
    means a reader can predict it without reading the source.
@@ -61,9 +67,10 @@ Rules that keep this honest:
 ### What "simple" costs
 
 Progressive disclosure is not free, and the price is paid deliberately:
-reject-on-full is the default even though waiting is friendlier, because waiting
-has unbounded memory consequences the library refuses to hide
-([D-030](./decisions.md#d-030-a-full-queue-rejects-immediately-by-default)).
+reject-on-full is the default even though waiting is friendlier. Wait mode has a
+separate configurable caller bound; explicitly unbounded waiting is allowed only
+with a clear warning that it gives up the memory guarantee
+([D-179](./decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room)).
 A default that is friendly but unsafe is the wrong default.
 
 ## Policy versus mechanism
@@ -107,11 +114,16 @@ deterministic tests, and the test strategy depends on them
 | Retry predicate | `(error, ctx) -> bool` | which failures deserve another attempt | retry every ordinary failure; cancellation is never retried |
 | Backoff policy | `(ctx) -> duration` | exponential, jittered, or domain-aware waiting | `Undecided` — see [retry-decorator.md](./utilities/retry-decorator.md#defaults) |
 | Attempt hooks | callbacks | logging, metrics, custom handling per attempt | none |
-| Overflow policy | enum | reject vs await insertion | reject |
+| Overflow policy | enum | reject vs wait | reject |
+| Waiting-caller capacity | value | bound callers outside a full queue | configurable in wait mode |
+| Throughput strategy | enum/strategy value | fixed window, sliding window, or token bucket | caller selects; no default chosen |
+| Queued-job deduplication | hash/key function | reject duplicate queued work | off |
 | Group predicates | `item -> bool` per group | routing into static groups | none; groups are explicit |
-| Group priority | advanced option | priority over fair rotation | fair rotation |
+| Job priority | advanced option | bounded priority selection with starvation protection | neutral FIFO |
 | Weight function | `item -> weight` | weight-budgeted batching | required for the weighted accumulator only |
 | Outcome correlation | positional or keyed | reordered or partial batch results | positional |
+| Accumulator controller | shared controller | govern completed batch operations | none |
+| Compensation | batch function | reverse possibly completed work for affected items | none |
 | Redis adapter | injected interface | any Redis client, or a fake in tests | none; absent means in-memory mode |
 | Queue capacity and timeout stages | values | backpressure shaping | see each utility's defaults table |
 
@@ -190,10 +202,10 @@ lock and never escapes.
 
 - **Utilities compose by wrapping functions**, not by registering with each other
   ([architecture.md § Composition](./architecture.md#composition-guidance)).
-- **No utility secretly uses another on the caller's behalf.**
-  `AsyncAccumulator` will not rate-limit for you
-  ([D-041](./decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller));
-  `RateController` will not retry for you
+- **Cross-utility behavior is explicit.** `AsyncAccumulator` may use the
+  controller the caller injects
+  ([D-180](./decisions.md#d-180-accumulators-accept-an-optional-controller));
+  `RateController` still will not retry for you
   ([D-004](./decisions.md#d-004-ratecontroller-never-retries)).
 - **Composition order is the caller's decision and is documented**, including
   which order is usually wrong and why.
@@ -207,15 +219,19 @@ lock and never escapes.
 ## Error handling
 
 - **Never swallow.** Every failure reaches the caller, an event, or both.
+- **Result by default.** Expected outcomes use a language-idiomatic `Result` or
+  value-or-error form. Throwing/unwrapping is explicit opt-in behavior
+  ([D-185](./decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values)).
+- **Use semantic library errors.** User-function failures are wrapped in a known
+  task-failed error with the original failure available as the cause.
 - **Isolate.** One task's failure never disturbs the queue, the workers, or
   sibling tasks ([INV-12](./architecture.md#invariants)).
 - **Aggregate across attempts.** When a retried call finally fails, surface the
   combination of every error encountered, not only the last one
   ([D-017](./decisions.md#d-017-exhausted-retries-surface-an-aggregated-error)).
-- **Distinguish contract errors from task failures.** A user batch function that
-  returns more outcomes than inputs has violated a contract; that is surfaced as
-  a contract error, not as a per-item failure
-  ([D-044](./decisions.md#d-044-surplus-positional-outcomes-are-a-contract-error)).
+- **Distinguish contract errors from task failures.** A batch result mismatch is
+  a contract violation and fails the whole batch by default; positional leniency
+  is explicit ([D-181](./decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default)).
 - **Announce every non-execution.** Timeout, cancellation, and shutdown
   cancellation are reported to the specific caller affected
   ([INV-2](./architecture.md#invariants)).

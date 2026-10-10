@@ -15,8 +15,11 @@ idiomatic equivalent elsewhere. Neither is secondary
 - [JobOptions](#joboptions)
 - [Cost means different things](#cost-means-different-things)
 - [Priority](#priority)
+- [Deduplication](#deduplication)
 - [Advisory admission queries](#advisory-admission-queries)
+- [Saturation snapshots](#saturation-snapshots)
 - [Deadline-aware enqueueing](#deadline-aware-enqueueing)
+- [Error contract](#error-contract)
 - [Defaults](#defaults)
 - [Invariants](#invariants)
 - [Test coverage](#test-coverage)
@@ -106,6 +109,10 @@ Rules that hold for all controllers:
 4. **The numeric range, overflow behavior, and rounding rule for `cost` and
    `priority` are identical in all five languages**
    ([INV-13](../architecture.md#invariants)).
+5. **Caller cancellation is a caller-outcome rule.** While queued it removes the
+   job. After execution starts, physical work completes, cancellation wins the
+   caller's eventual outcome, and the eventual work result is discarded
+   ([D-182](../decisions.md#d-182-queued-cancellation-wins-the-caller-outcome-without-stopping-running-work)).
 
 ## Cost means different things
 
@@ -165,6 +172,18 @@ a `JobOptions.priority` value would remove a parallel mechanism, but probabilist
 prioritization has no `JobOptions` equivalent today. Unresolved — see
 [open items](#open-items).
 
+## Deduplication
+
+Queued-job deduplication is optional
+([D-184](../decisions.md#d-184-optional-queued-job-deduplication-rejects-duplicates)).
+The caller supplies a hash/key function evaluated at submission. If that key is
+already present in queued work, the new submission fails with the semantic
+`AlreadyQueued` error.
+
+The duplicate never attaches to the original submission's awaitable.
+Deduplication identity is separate from `JobOptions.id`, which remains an opaque
+correlation ID. No in-flight deduplication behavior is specified.
+
 ## Advisory admission queries
 
 Two queries, both **advisory and non-reserving**
@@ -218,6 +237,15 @@ flowchart TD
   NONE --> WARN
 ```
 
+## Saturation snapshots
+
+Both controllers expose an immutable point-in-time saturation snapshot with queue
+depth, in-flight work, callers waiting outside the queue, and the applicable cost
+or weight. The snapshot is advisory and racy: it helps a caller decide whether to
+submit, skip, or cancel upstream work, but never reserves capacity or guarantees
+the next admission result
+([D-113](../decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity)).
+
 ## Deadline-aware enqueueing
 
 "Accept only if this can begin before `X`; otherwise reject immediately"
@@ -249,6 +277,19 @@ already-specified behavior ([INV-2](../architecture.md#invariants)). Deadline
 rejection is therefore a sound optimization where eligibility is computable, and a
 best-effort nicety where it is not.
 
+## Error contract
+
+Expected outcomes use semantic Limitful error categories in every binding
+([D-185](../decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values)).
+Operations return an idiomatic `Result` or value-or-error form by default.
+Throwing, raising, or unwrapping is explicit opt-in behavior.
+
+At minimum, the model distinguishes queue full, waiting-room full, timeout,
+cancellation, `AlreadyQueued`, invalid cost/weight, contract violation, and task
+failure. When user code fails, Limitful returns a known task-failed error whose
+cause exposes the original failure. TypeScript's `neverthrow` is a candidate, not
+a selected dependency.
+
 ## Defaults
 
 | Option | Default | Notes |
@@ -258,6 +299,7 @@ best-effort nicety where it is not.
 | `priority` | Neutral, FIFO | Banded and aging-protected when enabled ([D-112](../decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging)) |
 | `cost` | `1` | Rejected at submission on `RateController` until weighted concurrency is decided ([D-116](../decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred)) |
 | `deadline` | None | Opt-in |
+| Queued-job deduplication | Off | Caller enables it and supplies the hash/key function |
 | `canStartNow` | Always available | Advisory |
 | `estimatedStartAt` | Available; may return absence | Never fabricated ([D-114](../decisions.md#d-114-estimatedstartat-is-best-effort-and-may-be-absent)) |
 | Completed-job retention | Off | Bounded if ever enabled; unbounded history is out of scope ([D-161](../decisions.md#d-161-explicitly-out-of-scope)) |
@@ -279,6 +321,7 @@ best-effort nicety where it is not.
   infeasibility.
 - Fire-and-forget is the same scheduling path as awaited submission — the caller
   simply does not retain the handle.
+- Expected failures use semantic library errors in the default result form.
 
 ## Test coverage
 

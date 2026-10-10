@@ -12,6 +12,7 @@ caller.
 - [Defaults](#defaults)
 - [Advanced options](#advanced-options)
 - [Lifecycle and cancellation](#lifecycle-and-cancellation)
+- [Compensation](#compensation)
 - [Flush triggers](#flush-triggers)
 - [Composition](#composition)
 - [Invariants](#invariants)
@@ -23,7 +24,7 @@ caller.
 
 | Owns | Does not own |
 | --- | --- |
-| Accumulating items into batches by size and time window | Rate limiting ([D-041](../decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller)) |
+| Accumulating items into batches by size and time window | Defining controller semantics; it accepts an optional shared-contract controller ([D-180](../decisions.md#d-180-accumulators-accept-an-optional-controller)) |
 | Invoking one true batch function per batch ([D-040](../decisions.md#d-040-asyncaccumulator-invokes-one-true-batch-function-per-batch)) | Retrying a failed batch ([retry-decorator.md](./retry-decorator.md)) |
 | Correlating per-input outcomes back to callers | Weight-based batching ([weighted-async-accumulator.md](./weighted-async-accumulator.md)) |
 | The three timeout stages and cancellation handling | Durable queueing ([INV-14](../architecture.md#invariants)) |
@@ -133,12 +134,13 @@ Contract violations in positional mode:
 
 | Situation | Behavior | Decision |
 | --- | --- | --- |
-| **Fewer outcomes than inputs** | Deliver every matching positional outcome normally; fail only the unmatched inputs. Never fail the whole batch | [D-043](../decisions.md#d-043-fewer-outcomes-than-inputs-fails-only-the-unmatched-inputs) |
-| **More outcomes than inputs** | Surface a contract error. Never silently ignore the surplus | [D-044](../decisions.md#d-044-surplus-positional-outcomes-are-a-contract-error) |
+| **Fewer or more outcomes than inputs, default mode** | Fail the whole batch as a contract violation | [D-181](../decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) |
+| **Fewer outcomes, positional lenient mode** | Deliver the returned prefix in order and fail the remaining inputs | [D-181](../decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) |
 | **Batch function throws before returning** | Every input in that batch completes with the same batch-level failure | [D-045](../decisions.md#d-045-a-throwing-batch-function-fails-every-input-in-that-batch) |
 
 Keyed/ID-based correlation exists for callers who need reordered or partial
-results. Its edge cases — missing, duplicate, and unknown keys — are open items.
+results. A missing required key fails the whole batch by default. No keyed
+leniency is defined.
 
 ## Timeout stages
 
@@ -151,16 +153,16 @@ behavior, not a failure timeout.
 | --- | --- | --- |
 | **Pre-admission** | Optional, before the item gains entry to the queue | The submission fails; the item never enters |
 | **Queue-wait** | While the item waits under backlog | The item is **removed from the accumulator and guaranteed never to execute later** ([D-036](../decisions.md#d-036-a-queue-wait-timeout-removes-the-item-permanently), [INV-7](../architecture.md#invariants)) |
-| **Execution** | Once work is running | **Signals cancellation to the running batch function**, not merely a caller-side timeout |
-| **Whole-batch-function** | Possibly separate | **Open item** — not yet decided |
+| **Per-item running signal** | Once the item belongs to a running batch | Completes that caller immediately with timeout/cancellation; the batch continues and the later value is discarded |
+| **Batch timeout** | While the batch function is running | Completes every still-pending caller with timeout, does not stop the function, and keeps the slot until it returns |
 
 Once an item is dequeued into a batch and execution begins, its queue-wait
-timeout no longer applies; the execution timeout policy takes over.
+timeout no longer applies; the per-item running and batch-timeout policies take
+over.
 
-**Cancelled items never run.** If a queued item's own task has been cancelled,
-that item must not run at all, even if it still physically resides in the queue
-([D-037](../decisions.md#d-037-a-cancelled-item-never-runs),
-[INV-7](../architecture.md#invariants)).
+Queued cancellation or timeout removes the item permanently. Once a batch starts,
+per-item signals affect only that item's caller and never cancel the shared batch
+([D-187](../decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects)).
 
 ## Defaults
 
@@ -174,21 +176,26 @@ that item must not run at all, even if it still physically resides in the queue
 | Overflow policy | `Reject` | ([D-030](../decisions.md#d-030-a-full-queue-rejects-immediately-by-default)) |
 | Pre-admission timeout | Not configured | Optional stage |
 | Queue-wait timeout | Not configured | Optional stage |
-| Execution timeout | `Undecided` | Open |
+| Per-item timeout | Not configured | Applies while queued and to the caller outcome after batching starts |
+| Batch timeout | Not configured | Resolves callers but does not stop physical batch work |
 | Correlation mode | Positional | ([D-042](../decisions.md#d-042-outcome-correlation-is-positional-by-default-keyed-is-advanced)) |
 | Waiting style | Event-driven where available | ([D-048](../decisions.md#d-048-prefer-event-driven-waiting-poll-at-the-batching-interval)) |
 | Clock | System clock | Injectable ([D-103](../decisions.md#d-103-the-clock-is-public-api)) |
-| Rate limiting | None | The caller composes it ([D-041](../decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller)) |
+| Controller | None | Optional `RateController`, `ThroughputController`, or shared-contract equivalent ([D-180](../decisions.md#d-180-accumulators-accept-an-optional-controller)) |
+| Compensation | None | Optional once-per-affected-batch function ([D-188](../decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch)) |
 
 ## Advanced options
 
 | Option | Shape | Effect |
 | --- | --- | --- |
 | Keyed correlation | key selector | Reordered or partial outcome handling |
+| Positional lenient mismatch | enum | Maps the returned prefix and fails the remainder |
+| Controller | shared controller | Governs batch-function invocations |
+| Compensation | batch function | Reverses possibly completed work for affected items |
 | Manual flush | method | Close the current batch now, as a barrier ([flush triggers](#flush-triggers)) |
 | Batching worker count / sampler | number or `ctx -> number` | Parallel batching groups |
-| Timeout stages | durations | Pre-admission, queue-wait, execution |
-| Overflow = await insertion | enum | Callers wait outside a full queue, uncapped ([D-032](../decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)) |
+| Timeout stages | durations | Pre-admission, queue-wait, per-item, and batch |
+| Overflow = wait | enum | Callers wait outside a full queue under a configured waiting-caller capacity; explicit unbounded waiting gives up the memory guarantee ([D-179](../decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room)) |
 | Clock / scheduler | injected | Deterministic window and timeout tests |
 | Event handlers | callbacks | Batch exceeded, max batch, item complete, error, sample |
 | Synchronization provider | injected | Optional coordinated batch ownership across instances ([SynchronizationProvider](./synchronization-provider.md#asyncaccumulator)) |
@@ -196,19 +203,36 @@ that item must not run at all, even if it still physically resides in the queue
 
 ## Lifecycle and cancellation
 
-- Shutdown is drain or cancel pending
-  ([D-070](../decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending)).
-  New submissions fail immediately with cancellation
-  ([INV-10](../architecture.md#invariants)).
+- Drain remains the normal graceful path. Instance-wide cancellation is identical
+  to cancel-dispose: new submissions stop, queued items complete as cancelled,
+  and running batches receive the instance cancellation signal
+  ([D-187](../decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects)).
 - **Drain** flushes accumulated items — including a partial batch — and lets
   in-flight batch functions finish.
-- **Cancel pending** completes queued-but-not-batched items as cancelled. A batch
-  already executing is not cancelled by shutdown.
-- A batching worker is never cancelled mid-batch
-  ([D-022](../decisions.md#d-022-workers-drain-gracefully-and-are-never-revived)).
-- Execution timeout and caller cancellation both signal the batch function
-  through its cancellation parameter. What happens when user code ignores that
-  signal is an open item.
+- **Cancel-dispose** completes queued items immediately, signals every running
+  batch through the instance-wide cancellation token, and completes their callers
+  with cancellation.
+- Per-item cancellation and timeout never signal a running batch.
+- Disposal waits for running work to settle as required and for every pending
+  compensation invocation.
+
+## Compensation
+
+An optional compensation function handles items whose callers timed out or
+cancelled after their batch started, plus every affected item after a batch
+timeout or instance cancellation
+([D-188](../decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch)).
+
+It runs once per affected batch after that batch eventually succeeds, fails, or
+returns following a timeout/cancellation. It receives the affected items and the
+available batch results, batch error, or timeout marker. Because physical work
+may or may not have happened, compensation must be safe when there is nothing to
+undo.
+
+A compensation failure emits a compensation-error event only. It is never
+implicitly retried and cannot replace callers' already-settled outcomes. A caller
+wanting retries wraps the compensation function explicitly. Disposal waits for
+all pending compensation.
 
 ## Flush triggers
 
@@ -221,7 +245,7 @@ A batch closes for exactly five reasons, and these are the complete set
 | **Max weight** | Adding the next item would exceed `maxBatchWeight` | Full, just under the bound ([INV-9](../architecture.md#invariants)) |
 | **Accumulation interval** | The window that began with the first item elapses | Partial, flushed immediately ([D-047](../decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle)) |
 | **Manual flush** | The caller explicitly asks | Partial, whatever is accumulated |
-| **Shutdown** | Drain flushes; cancel-pending cancels ([D-070](../decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending)) | Partial, or nothing |
+| **Shutdown** | Drain flushes; cancel-dispose cancels queued and running callers ([D-187](../decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects)) | Partial, or nothing |
 
 Max weight applies only to
 [`WeightedAsyncAccumulator`](./weighted-async-accumulator.md). The other four are
@@ -253,9 +277,9 @@ end of a file, a test asserting a deterministic batch boundary. Its contract:
 4. **Flushing an empty accumulator is a no-op** that completes successfully and
    invokes no batch function.
 5. **It respects admission, not bypasses it.** Flush closes a batch early; it does
-   not grant the batch function permission it would not otherwise have, and a
-   composed controller still gates the call
-   ([D-041](../decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller)).
+   not grant the batch function permission it would not otherwise have, and an
+   injected or externally composed controller still gates the call
+   ([D-180](../decisions.md#d-180-accumulators-accept-an-optional-controller)).
 6. **Concurrent flushes coalesce.** Two overlapping flush requests observe the
    same batch boundary rather than producing two tiny batches.
 
@@ -301,7 +325,8 @@ in a different batch.
 ## Events and metrics
 
 Batch exceeded, max batch reached, item complete, error, and the periodic sample
-event. Snapshots expose queue depth, current batch size, and in-flight batch
+event. Compensation failure is a dedicated event carrying the affected items and
+error. Snapshots expose queue depth, current batch size, and in-flight batch
 count. See [observability.md](../subsystems/observability.md).
 
 ## Test coverage
@@ -314,12 +339,8 @@ Shared queue behavior is `QA-xxx`; batching-worker behavior is also covered by
 
 | Item | Status |
 | --- | --- |
-| Whether a separate whole-batch-function timeout exists | Not decided ([D-035](../decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage)) |
-| Whether execution deadlines are batch-wide or per item | Not decided |
-| Behavior when user code ignores a cancellation signal | Not decided |
 | The atomic race rule when timeout or cancellation and the execution claim become ready concurrently | Not decided ([D-036](../decisions.md#d-036-a-queue-wait-timeout-removes-the-item-permanently)) |
-| Keyed-correlation edge cases: missing, duplicate, and unknown keys | Not decided ([D-042](../decisions.md#d-042-outcome-correlation-is-positional-by-default-keyed-is-advanced)) |
-| Where a surplus-outcome contract error is surfaced, and whether it changes already-matched callers' outcomes | Not decided ([D-044](../decisions.md#d-044-surplus-positional-outcomes-are-a-contract-error)) |
+| Duplicate and unknown keyed results | Not decided; missing keys already fail the whole batch by default |
 | The exact C# surface for batch outcomes | Not decided |
 | Ownership of the first-item accumulation window when several batching workers are idle | Not decided ([D-047](../decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle)) |
 | Latency semantics of polling implementations | Not decided ([D-048](../decisions.md#d-048-prefer-event-driven-waiting-poll-at-the-batching-interval)) |

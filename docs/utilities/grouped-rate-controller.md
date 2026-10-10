@@ -1,8 +1,8 @@
 # GroupedRateController
 
 **Responsibility.** Apply different concurrency limits to different kinds of
-items by bucketing them into static groups, while holding total concurrency under
-one shared global ceiling.
+items by bucketing them into static groups, with an optional shared global
+ceiling.
 
 > **Naming note.** `CLAUDE.md` and the round-3 Q&A spelled this
 > `GrouppedRateController`. These documents use the corrected spelling
@@ -30,8 +30,8 @@ one shared global ceiling.
 | --- | --- |
 | Static group definitions and their per-group limits | Dynamic group creation ([D-060](../decisions.md#d-060-groups-are-static)) |
 | Group matching by predicate, and unmatched-item policy | Per-group retry policy |
-| The shared global ceiling and its allocation across groups | Batching |
-| Arbitration when several groups compete for one shared slot | Time-window limiting |
+| The optional shared global ceiling | Batching |
+| Global FCFS arbitration when several groups compete for one shared slot | Time-window limiting |
 
 **Groups are static** — defined upfront, never created or changed at runtime
 ([D-060](../decisions.md#d-060-groups-are-static)). Dynamic grouping is
@@ -44,7 +44,7 @@ memory-leak concerns that are not worth taking on.
 
 ```text
 grouped = groupedRateController({
-  globalConcurrency: 50,
+  globalConcurrency: 50, # optional; omit for independent group ceilings
   groups: [
     { name: "premium",  concurrency: 30, matches: item => item.tier == "premium" },
     { name: "free",     concurrency: 10, matches: item => item.tier == "free" },
@@ -55,16 +55,11 @@ grouped = groupedRateController({
 result = await grouped.run(item, () => handle(item))
 ```
 
-Per-group limits and the shared global ceiling are **both** numeric and **both**
-enforced ([D-062](../decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling)).
-Groups are therefore *not* fully independent: total concurrency never reaches the
-sum of the group limits. In the example above, the group limits sum to 45 plus a
-default group of 5, and the global ceiling of 50 is what actually binds.
-
-**Allocation requirement.** Allocation of the shared global capacity must be
-normalized relative to both the number of active/contending groups and the global
-worker/slot count. The exact normalization algorithm is not yet defined — see
-[open items](#open-items).
+Per-group limits are always enforced. The shared global ceiling is optional and
+off by default
+([D-186](../decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention)).
+Without it, total concurrency may reach the sum of group limits. With it, total
+in-flight work also stays at or below that ceiling.
 
 ## Matching and unmatched items
 
@@ -88,15 +83,12 @@ flowchart TD
   GQ --> ARB
   DQ --> ARB
 
-  ARB{"A shared global slot opens"} --> COMP["Collect groups with queued work"]
+  ARB{"A slot opens"} --> COMP["Collect globally queued eligible jobs"]
   COMP --> LIM{"Group below its own limit?"}
-  LIM -->|"no"| SKIP["Skip this group for now"]
-  SKIP --> ROT
-  LIM -->|"yes"| ROT{"Arbitration"}
-  ROT -->|"fair rotation - default"| PICK["Next group in rotation"]
-  ROT -->|"caller priorities - advanced"| PRIO["Highest-priority competing group"]
-  PICK --> RUN["Acquire the shared slot and the group slot, then execute"]
-  PRIO --> RUN
+  LIM -->|"no"| SKIP["Skip this job until its group has room"]
+  SKIP --> COMP
+  LIM -->|"yes"| PICK["Choose globally longest-waiting eligible job"]
+  PICK --> RUN["Acquire the group slot and, when configured, the shared slot"]
   RUN --> REL["Release both slots on completion"]
   REL --> ARB
 ```
@@ -109,13 +101,13 @@ open item.
 
 ## Shared-ceiling scheduling
 
-When a shared global slot opens and several groups have queued work, the next
-group is chosen by **fair rotation** by default. Caller-assigned group priorities
-are an advanced API option
-([D-063](../decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced)).
+When an enabled global ceiling is contended, the globally longest-waiting
+eligible job receives the next slot, regardless of group. Eligibility still
+requires that job's group to be below its own limit
+([D-186](../decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention)).
 
-Two slots are required to execute: one from the group's own limit and one from the
-shared global ceiling. Both are released on completion.
+A group slot is always required. When the shared global ceiling is configured, a
+global slot is also required. Every acquired slot is released on completion.
 
 ## Reserved shares — deferred advanced feature
 
@@ -123,9 +115,8 @@ shared global ceiling. Both are released on completion.
 > version ([D-132](../decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope)).
 
 Per-group limits are **maximums**. They answer "how much may this group take",
-never "how much is this group guaranteed". Under contention a group can therefore
-be squeezed to zero by the shared ceiling even while sitting below its own limit,
-because fair rotation distributes *opportunities*, not *capacity*.
+never "how much is this group guaranteed". Reserved shares apply only when the
+optional shared ceiling is enabled.
 
 A **reserved share** is the missing guarantee: a minimum fraction of the shared
 ceiling that a group can always claim when it has queued work, with unused
@@ -144,7 +135,7 @@ Required properties whenever this is built:
 
 1. **Reservations are floors, limits are ceilings.** Both bind; a group gets at
    least its reserved share when it has demand, and never more than its own limit
-   ([D-062](../decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling)).
+   ([D-132](../decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope)).
 2. **Unused reservation is reclaimable**, so a reserved-but-idle group costs
    nothing. A reservation that idles capacity would be worse than priority.
 3. **Reserved shares must sum to at most the shared ceiling.** Over-subscription
@@ -152,28 +143,26 @@ Required properties whenever this is built:
 4. **Reclaimed capacity is surrendered promptly** when the reserving group's
    demand returns — bounded by in-flight completion, never by preemption, since
    running work is never cancelled ([D-022](../decisions.md#d-022-workers-drain-gracefully-and-are-never-revived)).
-5. **It composes with, and does not replace, fair rotation.** Rotation allocates
-   what is left after reservations are satisfied
-   ([D-063](../decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced)).
+5. **It composes with global FCFS.** Reservations would allocate guaranteed
+   floors first; globally longest-waiting eligible jobs would compete for the
+   remainder.
 
 **Why this is stronger than priority, and why it still waits.** Priority decides
 *who goes next*; a reservation decides *how much is always available* — the
-difference between "checkout usually wins" and "checkout always has 20%". But it
-needs the shared-capacity normalization algorithm that is still undecided, and
-layering guaranteed floors on an undefined allocator would bake in whatever that
-allocator happens to do. It is sequenced after normalization deliberately.
+difference between "checkout usually wins" and "checkout always has 20%". It
+requires a separately specified reservation allocator and remains deferred.
 
 ## Defaults
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `globalConcurrency` | **Required** | The shared ceiling is the reason this utility exists |
+| `globalConcurrency` | Not configured | Optional shared ceiling; off by default |
 | Per-group `concurrency` | **Required per group** | A group without a limit is just the global ceiling |
 | Groups | **Required**, static | ([D-060](../decisions.md#d-060-groups-are-static)) |
 | Unmatched-item policy | Throw, unless a default group is configured | ([D-061](../decisions.md#d-061-unmatched-items-route-to-a-default-group-or-throw)) |
-| Shared-slot arbitration | Fair rotation | ([D-063](../decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced)) |
+| Shared-slot arbitration | Global FCFS | Longest-waiting eligible job when the optional ceiling is contended |
 | Reserved shares | None | Deferred; limits are maximums, not guarantees ([D-132](../decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope)) |
-| Group priorities | None | Advanced opt-in |
+| Job priority | Neutral FIFO | Uses the shared bounded-priority contract when enabled |
 | Overflow policy | `Reject` | Inherited from the queue primitive ([D-030](../decisions.md#d-030-a-full-queue-rejects-immediately-by-default)) |
 | Max queued per group | `Undecided` | Inherits the undecided default bound ([rate-controller.md § Open items](./rate-controller.md#open-items)) |
 | Queue scope | `Undecided` | Whether each group has its own queue or one shared queue is partitioned — see [open items](#open-items) |
@@ -182,7 +171,7 @@ allocator happens to do. It is sequenced after normalization deliberately.
 
 | Option | Shape | Effect |
 | --- | --- | --- |
-| Group priority | per-group value | Overrides fair rotation for shared-slot arbitration |
+| Job priority | shared job option | Retains the bounded-priority safety rules; the default remains FIFO |
 | Reserved share | per-group fraction | **Deferred.** Guaranteed reclaimable minimum of the shared ceiling ([reserved shares](#reserved-shares--deferred-advanced-feature)) |
 | Default group | group definition | Turns unmatched-item throwing into fallback routing |
 | Per-group timeouts and capacity | per-group values | Different backpressure per group |
@@ -219,23 +208,19 @@ grouped.run(item, () => perTenantBatching(item.tenant).submit(item))
 resilient = retry.wrap(item => grouped.run(item, () => handle(item)), { attempts: 3 })
 ```
 
-Do **not** emulate this with one `RateController` per group: independent limiters
-sum to more than any global ceiling, which is exactly the problem this utility
-exists to solve
-([S-005](../decisions.md#s-005-fully-independent-groups-summing-to-total-concurrency)).
+Independent per-group ceilings are the default. Configure `globalConcurrency`
+when the sum must also be bounded.
 
 ## Invariants
 
-- The shared global ceiling is never exceeded, even when every group is below its
-  own limit ([INV-4](../architecture.md#invariants)).
+- When configured, the shared global ceiling is never exceeded, even when every
+  group is below its own limit ([INV-4](../architecture.md#invariants)).
 - A group never exceeds its own limit, even when the global ceiling has room.
-- Total concurrency never reaches the sum of group limits when that sum exceeds
-  the global ceiling.
+- Without a global ceiling, groups may reach the sum of their limits.
 - An unmatched item either routes to the default group or throws — it is never
   silently dropped ([INV-1](../architecture.md#invariants)).
-- Fair rotation does not starve a competing group with queued work.
-- Shared-capacity allocation is normalized against the number of contending
-  groups and the global slot count.
+- Under a contended global ceiling, the longest-waiting eligible job is selected
+  regardless of group.
 
 ## Events and metrics
 
@@ -252,11 +237,7 @@ Case IDs `GRC-xxx` in [testing.md § GroupedRateController](../testing.md#groupe
 
 | Item | Status |
 | --- | --- |
-| The exact public API shape | Not decided ([D-062](../decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling)) |
-| The shared-capacity normalization algorithm, including integer-remainder handling | Not decided |
-| The definition of an "active" or "contending" group | Not decided |
-| Redistribution of unused group capacity | Not decided |
-| The exact fair-rotation algorithm, and how advanced priorities interact with fairness and starvation guarantees | Not decided ([D-063](../decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced)) |
+| The exact public API shape | Not decided ([D-186](../decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention)) |
 | Whether the implementation is one shared admission layer or one `RateController` per group plus an arbitrator | Not decided. Surfaced during consolidation |
 | Predicate evaluation order, and whether first match wins when several groups match | Not decided. Surfaced during consolidation |
 | Whether a single group can be drained independently | Not decided. Surfaced during consolidation |

@@ -94,9 +94,10 @@ Every business test case has a **stable ID**: a component prefix plus a number
 | `WAA` | [WeightedAsyncAccumulator](./utilities/weighted-async-accumulator.md) |
 | `RD` | [RetryDecorator](./utilities/retry-decorator.md) |
 | `QA` | [Queue and admission](./subsystems/queue-and-admission.md) |
-| `RDS` | [Redis coordination](./subsystems/redis-coordination.md) |
+| `RDS` | [Redis coordination](./subsystems/RedisSynchronizationProvider.md) |
 | `LC` | [Lifecycle and disposal](./architecture.md#lifecycle-and-disposal) |
 | `OB` | [Observability](./subsystems/observability.md) |
+| `ER` | [Shared error contract](./subsystems/controller-contract.md#error-contract) |
 
 **Each language's test carries its case ID in a comment above the test.** When a
 spec case changes, the ID locates every language's implementation of that case and
@@ -129,7 +130,7 @@ If a test needs a seam that does not exist for users, the seam is wrong.
 | **Seeded random source** | System randomness | Probabilistic retry prioritization ([D-016](./decisions.md#d-016-retry-scheduling-priority-is-configurable)) |
 | **Scripted worker-count sampler** | The sampling function | Exact scale-up and scale-down sequences, delta-cap behavior |
 | **Recording batch function** | The user batch function | Batch composition: how many calls, with which items, in which order |
-| **Scripted batch function** | The user batch function | Fewer/more/throwing outcome contract violations ([D-043](./decisions.md#d-043-fewer-outcomes-than-inputs-fails-only-the-unmatched-inputs), [D-044](./decisions.md#d-044-surplus-positional-outcomes-are-a-contract-error), [D-045](./decisions.md#d-045-a-throwing-batch-function-fails-every-input-in-that-batch)) |
+| **Scripted batch function** | The user batch function | Default whole-batch mismatch failure, positional leniency, keyed missing results, and throwing batch functions ([D-181](./decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default), [D-045](./decisions.md#d-045-a-throwing-batch-function-fails-every-input-in-that-batch)) |
 | **Counting weight function** | The user weight function | That weight is computed exactly once, at insertion ([D-052](./decisions.md#d-052-item-weight-is-computed-once-at-insertion)) |
 | **Scripted retry predicate** | `shouldRetry` | Which failures retry, and that cancellation ignores the predicate |
 | **Gated job function** | The user function | Holding jobs in flight to observe ceiling enforcement |
@@ -215,10 +216,10 @@ test.
   1. Defaults, with nothing configured beyond the required value.
   2. Every advanced override path listed in
      [design-principles.md § Public override points](./design-principles.md#public-override-points).
-  3. Cancellation at every stage: awaiting insertion, queued, executing, during
+  3. Cancellation at every stage: waiting for admission, queued, executing, during
      backoff.
   4. All three timeout stages, independently.
-  5. Queue behavior: full, reject, await insertion, no drop-oldest, bounded depth.
+  5. Queue behavior: full, reject, wait, no drop-oldest, bounded depth.
   6. Retries: attempt counting, aggregated error, slot release, cancellation
      terminality.
   7. Grouped and global limits together, including the sum-exceeds-ceiling case.
@@ -260,10 +261,10 @@ All time cases use a virtual monotonic clock and manual scheduler.
 
 | ID | Case | Source | Status |
 | --- | --- | --- | --- |
-| TC-001 | The first cost-one job starts immediately and anchors the first fixed window | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — simple pacing model and window anchor are not decided |
-| TC-002 | A fixed window grants at most its configured credits; excess queued cost waits for the next boundary | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — fixed-window default is not decided |
-| TC-003 | Unused fixed-window credits expire at the boundary and do not enlarge the next window | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — fixed-window default is not decided |
-| TC-004 | Smooth pacing and minimum start spacing are disabled by default | [throughput-controller.md](./utilities/throughput-controller.md#unresolved-design-questions) | **Blocked** — simple pacing default is not decided |
+| TC-001 | A caller can select the shipped fixed-window strategy | [D-178](./decisions.md#d-178-throughputcontroller-ships-caller-selected-throughput-strategies) | Ready |
+| TC-002 | A caller can select the shipped sliding-window strategy | [D-178](./decisions.md#d-178-throughputcontroller-ships-caller-selected-throughput-strategies) | Ready |
+| TC-003 | A caller can select the shipped token-bucket strategy | [D-178](./decisions.md#d-178-throughputcontroller-ships-caller-selected-throughput-strategies) | Ready |
+| TC-004 | Construction does not silently choose a throughput strategy for the caller | [D-178](./decisions.md#d-178-throughputcontroller-ships-caller-selected-throughput-strategies) | Ready |
 | TC-005 | Omitted job cost is `1`; an explicit positive cost is evaluated once at submission | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
 | TC-006 | Launch commit spends a job's cost exactly once; completion, failure, and post-launch cancellation do not refund it | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
 | TC-007 | A non-positive, non-finite, or unsupported job cost fails with actionable validation | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
@@ -284,25 +285,26 @@ All time cases use a virtual monotonic clock and manual scheduler.
 | TC-022 | Cancel-pending announces cancellation for every queued job, spends no credit for them, and lets committed work finish | [D-166](./decisions.md#d-166-throughputcontroller-uses-one-bounded-event-driven-scheduler) | Ready |
 | TC-023 | Without a composed concurrency controller, several slow jobs may remain in flight after their starts were validly admitted | [D-165](./decisions.md#d-165-throughputcontroller-spends-time-credits-atomically-at-launch) | Ready |
 | TC-024 | Submitting after shutdown begins fails immediately and schedules no wake-up | [INV-10](./architecture.md#invariants) | Ready |
+| TC-025 | A caller-supplied custom throughput strategy participates as a first-class strategy | [D-178](./decisions.md#d-178-throughputcontroller-ships-caller-selected-throughput-strategies) | **Blocked** — custom strategy support is open |
 
 ### GroupedRateController (GRC)
 
 | ID | Case | Source | Status |
 | --- | --- | --- | --- |
-| GRC-001 | Each group's in-flight count stays at or under its own limit | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | Ready |
-| GRC-002 | Global in-flight stays at or under the shared ceiling even when every group still has room | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | Ready |
-| GRC-003 | When group limits sum above the global ceiling, total concurrency never reaches that sum | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | Ready |
+| GRC-001 | Each group's in-flight count stays at or under its own limit | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Ready |
+| GRC-002 | With the optional global ceiling enabled, global in-flight stays at or under it even when every group still has room | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Ready |
+| GRC-003 | With the global ceiling omitted, groups may concurrently reach the sum of their own limits | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Ready |
 | GRC-004 | An item is governed by the limit of the group whose predicate matched it | [D-061](./decisions.md#d-061-unmatched-items-route-to-a-default-group-or-throw) | Ready |
 | GRC-005 | An unmatched item routes to the default group when one is configured | [D-061](./decisions.md#d-061-unmatched-items-route-to-a-default-group-or-throw) | Ready |
 | GRC-006 | An unmatched item throws when no default group is configured | [D-061](./decisions.md#d-061-unmatched-items-route-to-a-default-group-or-throw) | Ready |
-| GRC-007 | With several groups queued, fair rotation serves each in turn and no competing group starves | [D-063](./decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced) | Ready |
-| GRC-008 | A group already at its own limit is skipped while other groups proceed | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | Ready |
-| GRC-009 | A group never exceeds its limit even when it is the only group with work | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | Ready |
+| GRC-007 | Under a contended global ceiling, the globally longest-waiting eligible job starts next regardless of group | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Ready |
+| GRC-008 | A group already at its own limit is skipped while other groups proceed | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Ready |
+| GRC-009 | A group never exceeds its limit even when it is the only group with work | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Ready |
 | GRC-010 | Snapshots and events are attributable per group | [D-090](./decisions.md#d-090-observability-is-event-driven-and-exposes-raw-data) | Ready |
 | GRC-011 | Shutdown applies to every group: queued items drain or cancel per mode | [D-070](./decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending) | Ready |
 | GRC-012 | Groups cannot be added or changed at runtime | [D-060](./decisions.md#d-060-groups-are-static) | Ready |
-| GRC-013 | Caller-assigned group priority overrides fair rotation | [D-063](./decisions.md#d-063-fair-rotation-by-default-caller-priorities-advanced) | **Blocked** — algorithm undefined |
-| GRC-014 | Shared allocation is normalized against contending-group count and slot count, including remainders | [D-062](./decisions.md#d-062-per-group-limits-plus-a-shared-global-ceiling) | **Blocked** — algorithm undefined |
+| GRC-013 | Retired — group-priority-over-fair-rotation arbitration was superseded by global FCFS | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Retired |
+| GRC-014 | Retired — normalized group allocation was superseded by global FCFS job selection | [D-186](./decisions.md#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) | Retired |
 | GRC-015 | A reserved share guarantees its group a minimum of the shared ceiling whenever it has demand | [D-132](./decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope) | **Blocked** — deferred |
 | GRC-016 | Unused reserved capacity is reclaimable by other groups and surrendered when demand returns | [D-132](./decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope) | **Blocked** — deferred |
 | GRC-017 | Reserved shares summing above the shared ceiling fail at construction | [D-132](./decisions.md#d-132-reserved-group-shares-are-accepted-in-direction-and-deferred-in-scope) | **Blocked** — deferred |
@@ -342,6 +344,10 @@ All time cases use a virtual monotonic clock and manual scheduler.
 | PW-029 | Construction rejects a missing, non-positive, or non-finite maximum worker count | [D-173](./decisions.md#d-173-parallelworkers-requires-an-explicit-maximum-worker-count) | Ready |
 | PW-030 | With a sampler and no explicit interval, sampling recurs at one-second intervals | [D-174](./decisions.md#d-174-parallelworkers-defaults-sampling-to-one-second) | Ready |
 | PW-031 | Retired — automatic escalation is unnecessary because worker replacement does not exist | [D-176](./decisions.md#d-176-parallelworkers-does-not-model-worker-loop-failure) | Retired |
+| PW-032 | An absent or invalid sample causes no scaling and preserves the current worker count | [D-183](./decisions.md#d-183-invalid-missing-failed-or-timed-out-samples-hold-worker-count) | Ready |
+| PW-033 | A throwing sampler preserves the count and emits an error event | [D-183](./decisions.md#d-183-invalid-missing-failed-or-timed-out-samples-hold-worker-count) | Ready |
+| PW-034 | A sampler that exceeds its timeout preserves the count; the default timeout equals the sampling interval | [D-183](./decisions.md#d-183-invalid-missing-failed-or-timed-out-samples-hold-worker-count) | Ready |
+| PW-035 | A new sample never overlaps a sampler evaluation that is still running | [D-183](./decisions.md#d-183-invalid-missing-failed-or-timed-out-samples-hold-worker-count) | Ready |
 
 ### AsyncAccumulator (AA)
 
@@ -354,32 +360,40 @@ All time cases use a virtual monotonic clock and manual scheduler.
 | AA-005 | While idle no countdown runs; the first arriving item starts the **full** window | [D-047](./decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle) | Ready |
 | AA-006 | While backlog remains, consecutive batches fire immediately with no cadence wait | [D-046](./decisions.md#d-046-batching-runs-on-parallelworkers-with-no-fixed-cadence) | Ready |
 | AA-007 | The next batch's timing does not depend on the previous batch function's duration | [D-046](./decisions.md#d-046-batching-runs-on-parallelworkers-with-no-fixed-cadence) | Ready |
-| AA-008 | Fewer outcomes than inputs: matched inputs succeed normally and only unmatched inputs fail | [D-043](./decisions.md#d-043-fewer-outcomes-than-inputs-fails-only-the-unmatched-inputs) | Ready |
-| AA-009 | More outcomes than inputs: a contract error is surfaced and the surplus is not ignored | [D-044](./decisions.md#d-044-surplus-positional-outcomes-are-a-contract-error) | Ready |
+| AA-008 | In default positional mode, fewer outcomes than inputs fails the whole batch | [D-181](./decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) | Ready |
+| AA-009 | In default positional mode, more outcomes than inputs fails the whole batch | [D-181](./decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) | Ready |
 | AA-010 | A throwing batch function fails every input in that batch with the same batch-level failure | [D-045](./decisions.md#d-045-a-throwing-batch-function-fails-every-input-in-that-batch) | Ready |
 | AA-011 | Keyed correlation returns each caller's outcome regardless of the returned order | [D-042](./decisions.md#d-042-outcome-correlation-is-positional-by-default-keyed-is-advanced) | Ready |
 | AA-012 | An expired queue-wait timeout removes the item, which then appears in no later batch | [D-036](./decisions.md#d-036-a-queue-wait-timeout-removes-the-item-permanently) | Ready |
 | AA-013 | A cancelled queued item appears in no batch, even while still physically queued | [D-037](./decisions.md#d-037-a-cancelled-item-never-runs) | Ready |
-| AA-014 | An expired execution timeout signals cancellation to the running batch function | [D-035](./decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage) | Ready |
+| AA-014 | A batch timeout completes every still-pending batch caller with timeout, does not stop the batch function, and holds the slot until it returns | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
 | AA-015 | An expired pre-admission timeout fails the submission without the item entering the queue | [D-035](./decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage) | Ready |
 | AA-016 | Once execution begins, the queue-wait timeout no longer fires for that item | [D-035](./decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage) | Ready |
 | AA-017 | A batch never exceeds `maxBatchSize` | [D-040](./decisions.md#d-040-asyncaccumulator-invokes-one-true-batch-function-per-batch) | Ready |
 | AA-018 | Drain flushes accumulated items, including a partial batch | [D-070](./decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending) | Ready |
-| AA-019 | Cancel-pending completes queued items as cancelled and does not cancel an executing batch | [D-070](./decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending) | Ready |
+| AA-019 | Instance cancellation/cancel-dispose cancels queued items, signals running batches, and completes their callers with cancellation | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
 | AA-020 | Every submitted item reaches exactly one terminal outcome | [INV-2](./architecture.md#invariants) | Ready |
-| AA-021 | Submitting a rate-limited batch function does not change accumulation behavior — composition is the caller's | [D-041](./decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller) | Ready |
-| AA-022 | Keyed correlation with missing, duplicate, or unknown keys | [D-042](./decisions.md#d-042-outcome-correlation-is-positional-by-default-keyed-is-advanced) | **Blocked** — edge cases undefined |
-| AA-023 | Where the surplus-outcome contract error is surfaced, and its effect on already-matched callers | [D-044](./decisions.md#d-044-surplus-positional-outcomes-are-a-contract-error) | **Blocked** — not decided |
-| AA-024 | Whole-batch-function timeout, if one exists | [D-035](./decisions.md#d-035-timeout-scopes-are-distinct-per-lifecycle-stage) | **Blocked** — not decided |
-| AA-025 | Behavior when the batch function ignores the cancellation signal | — | **Blocked** — not decided |
+| AA-021 | An optional injected `RateController` or `ThroughputController` governs batch operations without changing accumulation behavior | [D-180](./decisions.md#d-180-accumulators-accept-an-optional-controller) | Ready |
+| AA-022 | A missing keyed result fails the whole batch by default | [D-181](./decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) | Ready |
+| AA-023 | Positional lenient mode maps the returned prefix in order and fails the remaining inputs | [D-181](./decisions.md#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) | Ready |
+| AA-024 | A per-item timeout after batch start completes that caller immediately, does not cancel the batch, and discards the later value | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
+| AA-025 | A per-item cancellation after batch start completes that caller immediately, does not cancel the batch, and discards the later value | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
 | AA-026 | First-item window ownership when several batching workers are idle | [D-047](./decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle) | **Blocked** — not decided |
 | AA-027 | Manual flush closes the current batch immediately, without waiting out the window | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
 | AA-028 | Awaiting a manual flush awaits the batch outcomes, so it works as a barrier | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
 | AA-029 | Manual flush with more than `maxBatchSize` queued produces full batches plus one partial, never an oversized batch | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
 | AA-030 | Flushing an empty accumulator succeeds and invokes no batch function | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
 | AA-031 | Two concurrent flush requests coalesce to one batch boundary | [D-131](./decisions.md#d-131-batches-flush-on-size-weight-interval-manual-request-or-shutdown) | Ready |
-| AA-032 | Manual flush does not bypass a composed controller's admission | [D-041](./decisions.md#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller) | Ready |
+| AA-032 | Manual flush does not bypass an injected or externally composed controller's admission | [D-180](./decisions.md#d-180-accumulators-accept-an-optional-controller) | Ready |
 | AA-033 | After a manual flush the window does not restart until the next item arrives | [D-047](./decisions.md#d-047-the-accumulation-window-starts-when-the-first-item-arrives-after-idle) | Ready |
+| AA-034 | Per-item timeout or cancellation while queued removes and fails the item before batching | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
+| AA-035 | Per-item timeout or cancellation never cancels sibling items or their running batch | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
+| AA-036 | Instance cancellation and cancel-dispose are the same terminal operation | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects) | Ready |
+| AA-037 | Compensation runs once per affected batch after success with affected items and available results | [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
+| AA-038 | Compensation runs once per affected batch after batch error with affected items and the error | [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
+| AA-039 | Compensation runs after batch timeout and instance cancellation with every affected item and the applicable marker | [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
+| AA-040 | Compensation failure emits an event, is not retried implicitly, and does not replace caller outcomes | [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
+| AA-041 | Dispose waits for every pending compensation invocation | [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
 
 ### WeightedAsyncAccumulator (WAA)
 
@@ -400,6 +414,7 @@ All time cases use a virtual monotonic clock and manual scheduler.
 | WAA-013 | The default over-max policy | [D-051](./decisions.md#d-051-a-single-over-max-item-runs-alone-in-flexible-mode-is-blocked-in-strict-mode) | **Blocked** — not decided |
 | WAA-014 | Combining `maxBatchSize` with `maxBatchWeight`, and which bound takes precedence | — | **Blocked** — not decided |
 | WAA-015 | Zero, negative, and throwing weight-function results | — | **Blocked** — not decided |
+| WAA-016 | Every decided accumulator per-item, batch-timeout, instance-cancellation, controller-injection, and compensation case is inherited unchanged | [D-187](./decisions.md#d-187-accumulator-item-and-instance-signals-have-distinct-effects), [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
 
 ### RetryDecorator (RD)
 
@@ -438,8 +453,8 @@ Every queue-owning utility must pass this suite against its own surface.
 | QA-001 | Enqueue succeeds while the queue is below capacity | [D-003](./decisions.md#d-003-queues-are-always-bounded) | Ready |
 | QA-002 | In reject mode, a full queue fails insertion immediately and never waits for space | [D-030](./decisions.md#d-030-a-full-queue-rejects-immediately-by-default) | Ready |
 | QA-003 | Reject is the default overflow mode with no configuration | [D-030](./decisions.md#d-030-a-full-queue-rejects-immediately-by-default) | Ready |
-| QA-004 | In await-insertion mode, a waiter is admitted once space frees | [D-031](./decisions.md#d-031-await-insertion-is-the-only-waiting-mode-and-it-is-advanced) | Ready |
-| QA-005 | Many concurrent waiters are all eventually admitted as space frees; none is rejected for being a waiter | [D-032](./decisions.md#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility) | Ready |
+| QA-004 | In wait mode, a caller inside the configured waiting-caller capacity is admitted once space frees | [D-179](./decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room) | Ready |
+| QA-005 | When the queue and bounded waiting room are full, the preferred outer-overflow default rejects the newcomer | [D-179](./decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room) | Ready |
 | QA-006 | Admission order among waiters is not asserted, and no test may depend on FIFO | [D-033](./decisions.md#d-033-no-fifo-guarantee-for-admission-waiters) | Ready |
 | QA-007 | Cancelling while awaiting insertion removes the request, which never enters the queue later | [D-034](./decisions.md#d-034-cancellation-while-awaiting-insertion-is-immediate-and-final) | Ready |
 | QA-008 | An expired queue-wait timeout removes the item permanently; it never executes | [D-036](./decisions.md#d-036-a-queue-wait-timeout-removes-the-item-permanently) | Ready |
@@ -454,6 +469,8 @@ Every queue-owning utility must pass this suite against its own surface.
 | QA-017 | When timeout or cancellation and the execution claim become ready together, the item still resolves exactly once | [queue-and-admission.md](./subsystems/queue-and-admission.md#cancellation) | Ready — minimum guarantee only; full rule **Blocked** |
 | QA-018 | The precise atomic race rule between timeout/cancellation and claim or admission | [D-034](./decisions.md#d-034-cancellation-while-awaiting-insertion-is-immediate-and-final) | **Blocked** — not decided |
 | QA-019 | Disposition of callers awaiting insertion when shutdown begins | [D-070](./decisions.md#d-070-shutdown-is-either-drain-or-cancel-pending) | **Blocked** — not decided |
+| QA-020 | Explicit unbounded waiting admits beyond the configured waiting-caller capacity and reports that the memory guarantee is disabled | [D-179](./decisions.md#d-179-wait-mode-has-a-configurable-bounded-waiting-room) | Ready |
+| QA-021 | Caller cancellation while executing wins the caller's eventual outcome, physical work completes, and the eventual work result is discarded | [D-182](./decisions.md#d-182-queued-cancellation-wins-the-caller-outcome-without-stopping-running-work) | Ready |
 
 ### Lifecycle and disposal (LC)
 
@@ -534,6 +551,7 @@ All cases run against the in-memory fake adapter with an injected clock.
 | OB-008 | Every announced non-execution — timeout, cancellation, shutdown cancellation — is observable through events | [INV-2](./architecture.md#invariants) | Ready |
 | OB-009 | The core package declares no observability dependency | [D-091](./decisions.md#d-091-otel-is-a-separate-opt-in-package-per-language) | Ready |
 | OB-010 | Exact event payload shapes, delivery synchronicity, and ordering guarantees | — | **Blocked** — not decided |
+| OB-011 | A compensation failure emits its dedicated event with the affected items and error | [D-188](./decisions.md#d-188-accumulator-compensation-runs-once-per-affected-batch) | Ready |
 
 ### Shared controller contract (JO)
 
@@ -569,6 +587,24 @@ Divergence in a shared case is a contract bug, not a per-controller detail
 | JO-024 | Number of priority bands and the default aging or weighted-fair algorithm | [D-112](./decisions.md#d-112-priority-is-optional-banded-and-protected-by-aging) | **Blocked** — not decided |
 | JO-025 | Weighted concurrency cost on `RateController`, once a starvation rule exists | [D-116](./decisions.md#d-116-weighted-concurrency-cost-for-ratecontroller-is-deferred) | **Blocked** — deferred |
 | JO-026 | Whether retry priority is expressed as `JobOptions.priority` | [D-141](./decisions.md#d-141-one-outcome-classification-vocabulary-is-shared-with-the-retry-predicate) | **Blocked** — not decided |
+| JO-027 | A saturation snapshot exposes queue depth, in-flight count, waiting-caller count, and applicable cost/weight | [D-113](./decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity) | Ready |
+| JO-028 | Saturation snapshots are advisory and racy and never reserve admission | [D-113](./decisions.md#d-113-admission-estimation-is-advisory-and-never-reserves-capacity) | Ready |
+| JO-029 | With deduplication enabled, a duplicate queued job is rejected as `AlreadyQueued` and never shares the original result | [D-184](./decisions.md#d-184-optional-queued-job-deduplication-rejects-duplicates) | Ready |
+| JO-030 | Deduplication uses the caller's hash/key function and remains separate from the correlation ID | [D-184](./decisions.md#d-184-optional-queued-job-deduplication-rejects-duplicates) | Ready |
+
+### Shared error contract (ER)
+
+Every binding uses idiomatic syntax while preserving these semantic categories
+and default result behavior.
+
+| ID | Case | Source | Status |
+| --- | --- | --- | --- |
+| ER-001 | Expected operation outcomes use a `Result` or value-or-error form by default rather than throwing | [D-185](./decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values) | Ready |
+| ER-002 | Throwing, raising, or unwrapping a failed result requires explicit caller opt-in | [D-185](./decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values) | Ready |
+| ER-003 | Queue full, waiting-room full, timeout, cancellation, `AlreadyQueued`, invalid cost/weight, contract violation, and task failure are distinguishable semantic library errors | [D-185](./decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values) | Ready |
+| ER-004 | A user-function failure is wrapped as a known task-failed library error | [D-185](./decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values) | Ready |
+| ER-005 | The task-failed error exposes the original user failure as its cause | [D-185](./decisions.md#d-185-expected-outcomes-use-semantic-library-errors-and-result-values) | Ready |
+| ER-006 | Equivalent failures map to the same semantic category in all five languages | [INV-13](./architecture.md#invariants) | Ready |
 
 ### KeyedControllerRegistry (KCR)
 

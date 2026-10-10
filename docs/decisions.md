@@ -1,10 +1,10 @@
 # Decision Log
 
-Durable design decisions for Limitful, consolidated from `CLAUDE.md` and the
-round-3 design grooming Q&A (`Q&A-Round-3.md`). Each entry states what was
-decided and what it costs. Superseded and rejected positions are preserved at the
-bottom rather than deleted, because the reasoning is what stops them being
-re-proposed.
+Durable design decisions for Limitful, consolidated from `CLAUDE.md`, the
+round-3 design grooming Q&A (`Q&A-Round-3.md`), and the approved consolidated
+round-3/round-4 source. Each entry states what was decided and what it costs.
+Superseded and rejected positions are preserved rather than deleted, because the
+reasoning is what stops them being re-proposed.
 
 **Consolidated:** 2026-10-03. **Status of the project:** design stage, no
 implementation ([testing.md § Implementation status](./testing.md#implementation-status)).
@@ -30,6 +30,8 @@ direction is settled but named details are not. `Superseded` / `Rejected` — se
 - [Outcome classification and adaptive presets](#outcome-classification-and-adaptive-presets)
 - [Provider capabilities](#provider-capabilities)
 - [Roadmap and scope](#roadmap-and-scope)
+- [Consolidated library contracts](#consolidated-library-contracts)
+- [Documentation site](#documentation-site)
 - [Superseded and rejected](#superseded-and-rejected)
 - [Unresolved items](#unresolved-items)
 
@@ -243,20 +245,21 @@ is what keeps it simple ([INV-8](./architecture.md#invariants)).
 
 ### D-030 A full queue rejects immediately by default
 
-**Status:** Accepted, with open items · **Source:** Q&A Q20; `CLAUDE.md` § Queues and Data Reliability
+**Status:** Accepted, clarified by [D-179](#d-179-wait-mode-has-a-configurable-bounded-waiting-room), with open items · **Source:** Q&A Q20; `CLAUDE.md` § Queues and Data Reliability
 
 **Decision.** When a bounded queue is full, insertion **fails immediately**. The
 queue never waits for space; waiting is available only through the explicit
-await-insertion mode.
+wait mode.
 
-**Consequences.** The default is the only option with bounded memory. A friendlier
-default would hide unbounded waiter growth.
+**Consequences.** Reject remains the simplest bounded default. D-179 later added
+a separately bounded waiting room and an explicit unbounded option with a memory
+warning.
 
 **Open.** The default capacity ([D-003](#d-003-queues-are-always-bounded)).
 
 ### D-031 Await insertion is the only waiting mode, and it is advanced
 
-**Status:** Accepted, with open items · **Source:** Q&A Q20, Q21
+**Status:** Superseded by [D-179](#d-179-wait-mode-has-a-configurable-bounded-waiting-room) · **Source:** Q&A Q20, Q21
 
 **Decision.** In await-insertion mode new tasks wait on **admission itself**;
 callers can hold a number of tasks pending their own insertion, and as the queue
@@ -267,7 +270,7 @@ explicitly chosen mode.
 
 ### D-032 Admission waiters are uncapped and the caller's responsibility
 
-**Status:** Accepted · **Source:** Q&A Q21
+**Status:** Superseded by [D-179](#d-179-wait-mode-has-a-configurable-bounded-waiting-room) · **Source:** Q&A Q21
 
 **Decision.** Limitful does **not** cap the number of callers waiting outside a
 full queue. That memory and backpressure responsibility — including any unbounded
@@ -298,7 +301,8 @@ concurrently.
 
 ### D-035 Timeout scopes are distinct per lifecycle stage
 
-**Status:** Accepted, with open items · **Source:** Q&A Q15, Q16
+**Status:** Accepted for generic controllers; accumulator-specific behavior
+superseded by [D-187](#d-187-accumulator-item-and-instance-signals-have-distinct-effects) · **Source:** Q&A Q15, Q16
 
 **Decision.** Four distinct scopes: **pre-admission** (optional, before the item
 gains entry), **queue-wait** (while waiting under backlog), **execution** (once
@@ -343,7 +347,7 @@ item's own function while merely starting them together.
 
 ### D-041 AsyncAccumulator does not integrate with RateController
 
-**Status:** Accepted · **Source:** Q&A Q9
+**Status:** Superseded by [D-180](#d-180-accumulators-accept-an-optional-controller) · **Source:** Q&A Q9
 
 **Decision.** `AsyncAccumulator` does **not** integrate with or submit work to
 `RateController`. A caller who wants both wraps the function with `RateController`
@@ -358,19 +362,19 @@ not the accumulator's responsibility.
 sequence in input order — with an advanced keyed/ID-based correlation option for
 callers who need reordered or partial-result handling.
 
-**Open.** Keyed-correlation edge cases (missing, duplicate, unknown keys) and the
-exact C# surface.
+**Open.** Keyed-correlation handling for duplicate and unknown returned keys, and
+the exact C# surface. Missing required keys are resolved by D-181.
 
 ### D-043 Fewer outcomes than inputs fails only the unmatched inputs
 
-**Status:** Accepted · **Source:** Q&A Q11
+**Status:** Superseded by [D-181](#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) · **Source:** Q&A Q11
 
 **Decision.** In positional mode, deliver every matching positional outcome
 normally and fail only the unmatched inputs. **Never fail the entire batch.**
 
 ### D-044 Surplus positional outcomes are a contract error
 
-**Status:** Accepted, with open items · **Source:** Q&A Q12
+**Status:** Superseded by [D-181](#d-181-batch-correlation-mismatches-fail-the-whole-batch-by-default) · **Source:** Q&A Q12
 
 **Decision.** If positional mode returns more outcomes than inputs, surface a
 contract error; never silently ignore the surplus.
@@ -492,7 +496,7 @@ configuration choice.
 
 ### D-062 Per-group limits plus a shared global ceiling
 
-**Status:** Accepted, with open items · **Source:** Q&A Q24
+**Status:** Superseded by [D-186](#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) · **Source:** Q&A Q24
 
 **Decision.** Enforce both numeric per-group concurrency limits **and** a numeric
 shared global concurrency ceiling. Groups are not fully independent, so total
@@ -508,7 +512,7 @@ shape.
 
 ### D-063 Fair rotation by default, caller priorities advanced
 
-**Status:** Accepted, with open items · **Source:** Q&A Q25
+**Status:** Superseded by [D-186](#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) · **Source:** Q&A Q25
 
 **Decision.** When a shared global slot opens and several groups have queued work,
 the next group is chosen by **fair rotation** among competing groups by default.
@@ -521,7 +525,9 @@ with fairness and starvation.
 
 ### D-070 Shutdown is either drain or cancel pending
 
-**Status:** Accepted, with open items · **Source:** Q&A Q3; `CLAUDE.md` § Lifecycle and Disposal
+**Status:** Accepted for generic controllers; accumulator-specific cancellation
+and disposal superseded by [D-187](#d-187-accumulator-item-and-instance-signals-have-distinct-effects) and
+[D-188](#d-188-accumulator-compensation-runs-once-per-affected-batch) · **Source:** Q&A Q3; `CLAUDE.md` § Lifecycle and Disposal
 
 **Decision.** On dispose, shut down with one of two user-chosen behaviors and only
 then tear everything down: **drain** — let jobs already in the queue finish
@@ -813,7 +819,8 @@ or that forces ceremony on a simple caller, is not finished.
 
 ### D-109 A docs site with per-utility examples and a playground is a deliverable
 
-**Status:** Accepted, with open items · **Source:** `CLAUDE.md` § Notes
+**Status:** Superseded by [D-189](#d-189-the-site-contract-and-homepage-are-canonicalized-in-one-spec)
+through [D-198](#d-198-the-static-site-shares-the-monorepo-framework-and-hosting-remain-undecided) · **Source:** `CLAUDE.md` § Notes
 
 **Decision.** Beyond comprehensive documentation and examples for all utilities in
 every supported language, the project ships a **docs site** that looks good and is
@@ -1053,7 +1060,6 @@ worker"; [D-140](#d-140-callers-classify-outcomes-the-library-never-infers-capac
 answers "what does this failure mean for capacity". They are deliberately separate.
 Operational lessons are borrowed from Go worker pools such as `ants`, not their API.
 
-
 ### D-131 Batches flush on size, weight, interval, manual request, or shutdown
 
 **Status:** Accepted · **Source:** Round-4 grooming
@@ -1072,12 +1078,11 @@ boundary. Manual flush fills that gap without changing the window rules
 
 ### D-132 Reserved group shares are accepted in direction and deferred in scope
 
-**Status:** Deferred · **Source:** Round-4 grooming
+**Status:** Deferred, clarified by [D-186](#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention) · **Source:** Round-4 grooming
 
 **Context.** Per-group limits are maximums; they say how much a group **may** take,
-never how much it is **guaranteed**. Under contention a group can be squeezed to
-zero by the shared ceiling while still below its own limit, because fair rotation
-distributes opportunities rather than capacity.
+never how much it is **guaranteed**. A reserved share would apply only when the
+optional shared ceiling is enabled.
 
 **Decision.** Optional reserved/minimum shares of the shared ceiling, with unused
 reservation reclaimable by other groups, are accepted as a direction and deferred
@@ -1086,12 +1091,9 @@ bind. Reserved shares must sum to at most the shared ceiling, validated at
 construction. Reclaimed capacity is surrendered on in-flight completion, never by
 preemption.
 
-**Consequences.** Stronger than priority — the difference between "checkout usually
-wins" and "checkout always has 20 percent" — but it depends on the shared-capacity
-normalization algorithm that is still undecided
-([D-062](#d-062-per-group-limits-plus-a-shared-global-ceiling)). Layering guaranteed
-floors on an undefined allocator would bake in whatever that allocator happens to
-do, so it is sequenced after normalization deliberately.
+**Consequences.** Stronger than priority — the difference between "checkout
+usually wins" and "checkout always has 20 percent" — but it requires a separately
+specified reservation allocator and remains deferred.
 
 ## Outcome classification and adaptive presets
 
@@ -1297,7 +1299,7 @@ multi-key layout, adapter interface, or timing defaults.
 
 ### D-165 ThroughputController spends time credits atomically at launch
 
-**Status:** Accepted · **Source:** `throughput-controller.md`
+**Status:** Accepted, clarified by [D-178](#d-178-throughputcontroller-ships-caller-selected-throughput-strategies) · **Source:** `throughput-controller.md`
 
 **Decision.** `ThroughputController` is the time-based peer of
 `RateController`. Cost is a positive immutable value evaluated once at
@@ -1306,9 +1308,9 @@ commit. Completion, failure, and cancellation after commit do not refund it. A
 cost that can never fit the configured maximum fails at submission rather than
 waiting forever.
 
-This record does not choose the simple API's pacing model, make fixed windows the
-default, or decide whether weighted cost affects pacing as well as quota. Those
-choices remain open in the owning utility document.
+This record does not make fixed windows the default or decide whether weighted
+cost affects pacing as well as quota. D-178 requires explicit selection among the
+three shipped strategies.
 
 **Consequences.** The utility limits when work may start, not how many started
 jobs remain in flight. A concurrency ceiling requires explicit composition with
@@ -1485,6 +1487,241 @@ timing; `ParallelWorkers` may provide bounded execution for due refreshes but
 does not own their clock. A generic scheduler utility remains deferred until a
 second consumer requires the same contract.
 
+## Consolidated library contracts
+
+### D-178 ThroughputController ships caller-selected throughput strategies
+
+**Status:** Accepted, with one open item · **Source:** Consolidated Q&A A1–A2
+
+**Decision.** `RateController` remains exclusively concurrency-based.
+`ThroughputController` is its time-throughput peer and requires the caller to
+select one of the library's shipped strategies: fixed window, sliding window, or
+token bucket. No strategy is designated as the default here, and this record does
+not invent the algorithms behind those strategies.
+
+**Open.** Whether callers may provide a custom throughput strategy.
+
+### D-179 Wait mode has a configurable bounded waiting room
+
+**Status:** Accepted · **Source:** Consolidated Q&A A3, A8; supersedes
+[D-031](#d-031-await-insertion-is-the-only-waiting-mode-and-it-is-advanced) and
+[D-032](#d-032-admission-waiters-are-uncapped-and-the-callers-responsibility)
+
+**Decision.** Both `RateController` and `ThroughputController` support `Reject`
+and `Wait`. Wait mode has a caller-configured capacity for callers waiting
+outside the bounded queue. When both the queue and waiting room are full, the
+preferred default is rejection. A caller may explicitly choose unbounded waiting,
+but that deliberately gives up the memory guarantee and must carry a clear
+warning.
+
+### D-180 Accumulators accept an optional controller
+
+**Status:** Accepted · **Source:** Consolidated Q&A A4; supersedes
+[D-041](#d-041-asyncaccumulator-does-not-integrate-with-ratecontroller)
+
+**Decision.** `AsyncAccumulator` accepts an optional controller through its
+configuration. The caller may inject a `RateController`, a
+`ThroughputController`, or an equivalent shared-contract controller to govern
+batch-function invocations. With no controller it remains standalone. External
+utility chaining remains caller-owned, nice to have, and not a current focus.
+
+### D-181 Batch correlation mismatches fail the whole batch by default
+
+**Status:** Accepted · **Source:** Consolidated Q&A A5–A6; supersedes
+[D-043](#d-043-fewer-outcomes-than-inputs-fails-only-the-unmatched-inputs) and
+[D-044](#d-044-surplus-positional-outcomes-are-a-contract-error)
+
+**Decision.** Positional and keyed correlation remain supported. By default, a
+wrong positional result count or missing keyed result is a batch contract
+violation and fails the whole batch. Positional mode alone offers an explicit
+lenient option: map the returned prefix to the first inputs and fail the
+remainder. No keyed leniency is defined.
+
+### D-182 Queued cancellation wins the caller outcome without stopping running work
+
+**Status:** Accepted · **Source:** Consolidated Q&A A7
+
+**Decision.** A caller cancellation signal removes work while it is queued. Once
+physical execution has started, the library does not stop that work: it runs to
+completion. If cancellation arrives while it is running, cancellation wins the
+caller's eventual terminal outcome and the eventual work value or failure is
+discarded. This does not change unrelated execution-timeout semantics.
+
+### D-183 Invalid, missing, failed, or timed-out samples hold worker count
+
+**Status:** Accepted · **Source:** Consolidated Q&A A10
+
+**Decision.** A `ParallelWorkers` sample that is absent, invalid, throws, or
+times out causes no scaling action; the current worker count holds until a later
+valid sample. A thrown sampler emits an error event. The sampler timeout defaults
+to the sampling interval, and sampling never overlaps.
+
+### D-184 Optional queued-job deduplication rejects duplicates
+
+**Status:** Accepted · **Source:** Consolidated Q&A A12
+
+**Decision.** Controllers may enable queued-job deduplication and supply a
+hash/key function. A duplicate queued submission is rejected as `AlreadyQueued`
+and never attaches to the original submission's result. The correlation ID
+remains a separate concept. This record does not define in-flight
+deduplication.
+
+### D-185 Expected outcomes use semantic library errors and Result values
+
+**Status:** Accepted · **Source:** Consolidated Q&A A14
+
+**Decision.** Every binding exposes the same semantic library-error categories
+with an idiomatic surface. Operations return a `Result` or value-or-error form by
+default; throwing or unwrapping is explicit opt-in behavior. A user-function
+failure is wrapped in a known task-failed library error whose cause remains
+accessible. `neverthrow` is only a candidate for TypeScript, not a chosen
+dependency.
+
+### D-186 Grouped global ceiling is optional with global FCFS contention
+
+**Status:** Accepted · **Source:** Consolidated Q&A A15; supersedes
+[D-062](#d-062-per-group-limits-plus-a-shared-global-ceiling) and
+[D-063](#d-063-fair-rotation-by-default-caller-priorities-advanced)
+
+**Decision.** `GroupedRateController` always enforces per-group concurrency
+limits. Its global ceiling is optional and off by default. When enabled and
+groups contend for the remaining global slots, the globally longest-waiting
+eligible jobs receive them first, regardless of group.
+
+### D-187 Accumulator item and instance signals have distinct effects
+
+**Status:** Accepted · **Source:** Consolidated Q&A A16–A17; supersedes only the
+accumulator-specific portions of [D-035](#d-035-timeout-scopes-are-distinct-per-lifecycle-stage)
+and [D-070](#d-070-shutdown-is-either-drain-or-cancel-pending)
+
+**Decision.** For accumulators, a queued item timeout or cancellation removes and
+fails that item. After the item joins a running batch, its own signal completes
+its caller immediately and discards the later value, but never cancels the
+batch. A batch timeout completes every still-pending affected caller with
+timeout, does not stop the batch function, and holds the batch slot until the
+function returns.
+Instance-wide cancellation cancels queued items and running batches and is the
+same operation as cancel-dispose. Disposal waits for required compensation.
+`WeightedAsyncAccumulator` inherits these rules where applicable.
+
+### D-188 Accumulator compensation runs once per affected batch
+
+**Status:** Accepted · **Source:** Consolidated Q&A A18
+
+**Decision.** An accumulator may receive a compensation function. It runs once
+per batch for affected items after batch success, batch error, batch timeout, or
+instance cancellation. It receives those items plus the available results,
+error, or timeout marker, and must be safe when no work actually happened.
+Compensation failure is event-only, has no implicit retry, and never changes
+callers' already-settled outcomes. Disposal waits for pending compensation.
+
+## Documentation site
+
+### D-189 The site contract and homepage are canonicalized in one spec
+
+**Status:** Accepted · **Source:** Consolidated Q&A B1, B3, B13; supersedes
+[D-109](#d-109-a-docs-site-with-per-utility-examples-and-a-playground-is-a-deliverable)
+
+**Decision.** [`docs/site/SPEC.md`](./site/SPEC.md) is the canonical site
+contract. The site is beautiful, convincing, extremely fast and responsive,
+installable, model-friendly, GEO-oriented, and example/playground driven. The
+language-agnostic homepage presents the pitch, a visual—not real-library—load
+simulation, then benchmarks. Simulation controls are flood size, concurrency,
+and naive versus Limitful.
+
+### D-190 Language site trees own URLs and front pages
+
+**Status:** Accepted · **Source:** Consolidated Q&A B2, B18–B19
+
+**Decision.** A global five-language selector switches the entire site and keeps
+the equivalent page selected. Language belongs in the URL, including the
+JavaScript/TypeScript `/js/` tree. Bare `/` is language-agnostic. Each language
+tree has its own getting-started front page, package versions, and changelog.
+
+### D-191 Benchmarks compare the five exact naive baselines
+
+**Status:** Accepted · **Source:** Consolidated Q&A B4
+
+**Decision.** Per-language before/after benchmarks compare Limitful with
+`Promise.all`, `Task.WhenAll`, `join_all`, one goroutine per job with a
+`WaitGroup`, and `asyncio.gather`, respectively. They report thread count, CPU,
+and memory, and their reproducible code lives in the project. No environment,
+dataset, budget, path, or result value is chosen by this record.
+
+### D-192 Markdown is exact page source and supports models and GEO
+
+**Status:** Accepted · **Source:** Consolidated Q&A B5, B7
+
+**Decision.** Every page has five separate language-specific Markdown sources.
+Markdown generates the page and is its exact source of truth; each page has a
+`.md` variant. Root `llms.txt` maps the docs. There is no `llms-full.txt` and no
+docs MCP. Every page begins with a standalone definition and schema.org data;
+question pages answer first, then show Limitful. Competitor comparison pages are
+excluded.
+
+### D-193 PWA, offline content, and client-side search are one contract
+
+**Status:** Accepted · **Source:** Consolidated Q&A B6, B11
+
+**Decision.** The site is installable. After first visit, the homepage and all
+five language trees work offline. Cmd+K/Ctrl+K search is available everywhere,
+searches all five languages entirely in the browser, ships and caches its index,
+and opens results offline. Cache-first instant repeat visits are not included,
+and there is no "new version available" prompt. No particular cache/update
+algorithm is specified.
+
+### D-194 Every applicable page has a playground; iframe viability is open
+
+**Status:** Accepted, with one open item · **Source:** Consolidated Q&A B8
+
+**Decision.** Every applicable page offers one ready-made playground for exactly
+that utility and language, preferably embedded. If embedding is unavailable,
+TypeScript may use StackBlitz/CodeSandbox, C# .NET Fiddle, Python an in-browser
+runtime, and Rust or Go outbound links.
+
+**Open.** Whether a Replit iframe can embed an editable external project.
+
+### D-195 Packages and the behavior spec version independently
+
+**Status:** Accepted, with implementation mechanics unspecified · **Source:**
+Consolidated Q&A B9, B18
+
+**Decision.** Old docs remain available. Each language package and its docs have
+independent versions and changelogs. The behavior spec has its own version, and a
+compatibility table maps package versions to spec versions. A package bugfix
+releases only that package; a behavior change advances the spec and bindings
+catch up independently. SemVer policy, URL grammar, initial versions, and table
+maintenance mechanics are not chosen.
+
+### D-196 API reference is handwritten and future CI detects drift both ways
+
+**Status:** Accepted · **Source:** Consolidated Q&A B12
+
+**Decision.** API references are handwritten Markdown. Future per-language CI
+compares every exported class or equivalent type, method/function, and option
+against that reference in both directions and fails on either undocumented code
+or documentation for a missing export. No extraction tool is selected.
+
+### D-197 The site is dark, private, English-only, and accessible
+
+**Status:** Accepted · **Source:** Consolidated Q&A B10, B14–B16
+
+**Decision.** The site uses a dark-only, glowing Linear/Raycast product-marketing
+direction. It is fully static, English-only, and has no analytics, tracking,
+cookies, or light theme. It meets WCAG 2.2 AA for contrast and keyboard use and
+respects reduced motion. Fonts, colors, tokens, and breakpoints remain
+unspecified.
+
+### D-198 The static site shares the monorepo; framework and hosting remain undecided
+
+**Status:** Accepted, with implementation choices undecided · **Source:**
+Consolidated Q&A B17
+
+**Decision.** Site source, Markdown, reproducible benchmark code, and the future
+five packages live in one monorepo so code and docs can change in one pull
+request. The site is fully static and can use any static host. Framework and
+hosting provider are intentionally undecided.
+
 ## Superseded and rejected
 
 Preserved deliberately. These are the readings and alternatives that were
@@ -1529,12 +1766,11 @@ under consideration as a *different* utility and remains
 
 ### S-005 Fully independent groups summing to total concurrency
 
-**Status:** Rejected by [D-062](#d-062-per-group-limits-plus-a-shared-global-ceiling)
+**Status:** Superseded by [D-186](#d-186-grouped-global-ceiling-is-optional-with-global-fcfs-contention)
 
 Letting each group have its own limit with no shared ceiling, so total concurrency
-could reach the sum of group limits. Rejected: the shared global ceiling is the
-reason the utility exists. Composing several independent `RateController`s has
-exactly this flaw.
+could reach the sum of group limits. This was rejected while the global ceiling
+was mandatory. D-186 later made that ceiling optional and off by default.
 
 ### S-006 A shared Rust core with thin bindings
 
@@ -1593,6 +1829,7 @@ answer. **A blocked test case must never be implemented by guessing**
 | Area | Question | Owner | Origin |
 | --- | --- | --- | --- |
 | ~~Rate limiting~~ | ~~Whether a separate per-second rate limiter utility is built~~ **Resolved: `ThroughputController`** | [S-010](#s-010-a-per-second-limiter-is-merely-under-consideration) | `CLAUDE.md` |
+| Throughput strategies | Whether callers may supply a custom strategy in addition to fixed window, sliding window, and token bucket | [throughput-controller.md](./utilities/throughput-controller.md#throughput-strategies) | Consolidated Q&A A2 |
 | Rate limiting | Default `maxQueued`, and default execution timeout | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Consolidation |
 | Retries | API shape and naming of the awaited and deferred paths | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Q&A Q4 |
 | Retries | Delayed-retry versus terminal dead-letter semantics | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Q&A Q4 |
@@ -1601,39 +1838,33 @@ answer. **A blocked test case must never be implemented by guessing**
 | Retries | The cross-language definition of an "ordinary failure" | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Q&A Q7 |
 | Retries | Default priority mode, and arbitration and starvation guarantees for all three | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Q&A Q5 |
 | Retries | Whether the deferred path's delayed queue is bounded, and its overflow policy | [retry-decorator.md](./utilities/retry-decorator.md#open-items) | Consolidation |
-| Batch outcomes | Keyed-correlation edge cases: missing, duplicate, unknown keys | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q10 |
+| Batch outcomes | Keyed-correlation handling for duplicate and unknown returned keys | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Consolidation |
 | Batch outcomes | The exact C# surface | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q10 |
-| Batch outcomes | Where a surplus-outcome contract error surfaces, and its effect on matched callers | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q12 |
 | Timeouts | Atomic race rules when timeout or cancellation and the execution claim or admission become ready together | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Q&A Q14, Q23 |
-| Timeouts | Whether a separate whole-batch-function timeout exists | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q16 |
-| Timeouts | Whether execution deadlines are batch-wide or per item | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q16 |
-| Timeouts | Behavior when user code ignores a cancellation signal | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q16 |
 | Batching workers | Ownership of the first-item accumulation window when several workers are idle | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q19 |
 | Batching workers | Latency semantics of polling implementations | [async-accumulator.md](./utilities/async-accumulator.md#open-items) | Q&A Q19 |
-| Queue policy | Exactly which utilities inherit reject-by-default, uncapped waiters, waiter ordering, and cancellation behavior | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Q&A Q20–Q23 |
+| Queue policy | Which non-controller utilities expose the controller-style bounded wait mode | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Consolidated Q&A A3, A8 |
 | Weighted batching | Whether strict or flexible is the default over-max policy | [weighted-async-accumulator.md](./utilities/weighted-async-accumulator.md#open-items) | Consolidation |
 | Weighted batching | Whether size and weight bounds may be combined, and precedence | [weighted-async-accumulator.md](./utilities/weighted-async-accumulator.md#open-items) | Consolidation |
 | Weighted batching | Zero, negative, and throwing weight results | [weighted-async-accumulator.md](./utilities/weighted-async-accumulator.md#open-items) | Consolidation |
 | Grouping | Public API shape | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Q&A Q24 |
-| Grouping | Normalization and integer-remainder algorithm | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Q&A Q24 |
-| Grouping | Definition of an active/contending group | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Q&A Q24 |
-| Grouping | Unused-capacity redistribution | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Q&A Q24 |
-| Grouping | Fair-rotation algorithm and advanced-priority interaction | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Q&A Q25 |
 | Grouping | Predicate evaluation order and multi-match behavior | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Consolidation |
 | Grouping | Whether `GroupedRateController` is one shared admission layer or per-group controllers plus an arbitrator | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Consolidation |
 | Naming | `GroupedRateController` versus the earlier `GrouppedRateController` spelling | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Consolidation |
 | Shutdown | Disposition of callers already awaiting insertion when shutdown begins | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Q&A Q3 |
 | Shutdown | Whether disposal is idempotent | [architecture.md](./architecture.md#open-items) | Consolidation |
-| Redis | The non-frozen membership policy and which policy is the default | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Q&A Q1 |
-| Redis | Whether the membership set and last-seen key co-locate under one hash tag | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | `CLAUDE.md` |
-| Redis | Division of `N` across processes, including integer remainders | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
-| Redis | The exact adapter interface for multi-key and scripted operations | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
-| Redis | Default key prefix, heartbeat interval, and staleness threshold | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
-| ~~Redis~~ | ~~Whether coordination is per-utility or process-wide~~ **Resolved: explicitly enabled per compatible utility by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract), never process-wide or implicit** | [redis-coordination.md](./subsystems/redis-coordination.md#open-items) | Consolidation |
+| Redis | The non-frozen membership policy and which policy is the default | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Q&A Q1 |
+| Redis | Whether the membership set and last-seen key co-locate under one hash tag | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | `CLAUDE.md` |
+| Redis | Division of `N` across processes, including integer remainders | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
+| Redis | The exact adapter interface for multi-key and scripted operations | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
+| Redis | Default key prefix, heartbeat interval, and staleness threshold | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
+| ~~Redis~~ | ~~Whether coordination is per-utility or process-wide~~ **Resolved: explicitly enabled per compatible utility by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract), never process-wide or implicit** | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
 | Observability | Event payload shapes, delivery synchronicity, ordering guarantees | [observability.md](./subsystems/observability.md#open-items) | Consolidation |
 | Observability | OTel metric and span naming conventions | [observability.md](./subsystems/observability.md#open-items) | Consolidation |
 | Project | Which binding lands first, and per-language test tooling | [testing.md](./testing.md#open-items) | Consolidation |
-| Docs | The docs site's tooling, hosting, structure, and Replit playground contents | [D-109](#d-109-a-docs-site-with-per-utility-examples-and-a-playground-is-a-deliverable) | `CLAUDE.md` § Notes |
+| Docs site | Framework and static hosting provider | [site/SPEC.md](./site/SPEC.md#issues-to-resolve) | Consolidated Q&A B17 |
+| Docs site | Whether a Replit iframe is viable | [site/SPEC.md](./site/SPEC.md#issues-to-resolve) | Consolidated Q&A B8 |
+| Docs site | Package/spec version mechanics, all-language offline size/update behavior, and `.md` serving mechanism | [site/SPEC.md](./site/SPEC.md#issues-to-resolve) | Consolidated Q&A B5, B6, B9 |
 | Controller contract | Whether `RetryDecorator`'s three priority modes collapse into `JobOptions.priority`, and where probabilistic prioritization then lives | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
 | Controller contract | The bounded-starvation rule that would unblock weighted concurrency cost | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |
 | Controller contract | Priority band count, and whether aging or weighted-fair is the advanced default | [controller-contract.md](./subsystems/controller-contract.md#open-items) | Round 4 |

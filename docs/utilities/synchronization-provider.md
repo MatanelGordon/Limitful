@@ -18,7 +18,7 @@ Concrete implementations may live in separate packages or a separate library:
 All implementations must satisfy the same observable synchronization contract.
 The Redis implementation's keys, scripts, liveness protocol, and outage mechanics
 are specified separately in
-[`redis-coordination.md`](../subsystems/redis-coordination.md)
+[`redis-coordination.md`](../subsystems/RedisSynchronizationProvider.md)
 ([D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ## Scope
@@ -99,7 +99,7 @@ configuration fails without it.
 | `RateController`, divided-allowance mode | Membership · idempotent identity sets · health | Leases/TTL · epoch |
 | `ThroughputController` | Atomic claim · **authoritative coordination time** · idempotent identity sets · epoch · health | Leases/TTL for local credit leases |
 | `ParallelWorkers` | Membership · idempotent identity sets · leases/TTL · health | Epoch |
-| `GroupedRateController` | Atomic claim **spanning group and global limits in one operation** · idempotent identity sets · health | Membership · epoch |
+| `GroupedRateController` | Atomic per-group claim · idempotent identity sets · health; when a global ceiling is enabled, one atomic claim spanning group and global limits | Membership · epoch |
 | `KeyedControllerRegistry` | Whatever its per-key controller requires, per scope | Membership for key-count visibility |
 
 Two entries carry the real weight. `ThroughputController` cannot be coordinated at
@@ -197,11 +197,11 @@ workers or overrides an owning controller's hard ceiling.
 
 ### GroupedRateController
 
-An optional provider coordinates the shared global ceiling and per-group limits
-across instances. Atomic group-aware claims must check both the selected group's
-limit and the global limit in one observable operation; independent local group
-counters cannot provide that guarantee. Group selection, fair rotation, and
-priority policy remain owned by `GroupedRateController`.
+An optional provider coordinates per-group limits and, when configured, the
+shared global ceiling across instances. Atomic group-aware claims must check both
+the selected group's limit and the global limit in one observable operation;
+independent local group counters cannot provide that guarantee. Global-FCFS job
+selection remains owned by `GroupedRateController`.
 
 ### AsyncAccumulator
 

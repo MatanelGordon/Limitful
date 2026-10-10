@@ -66,6 +66,7 @@ callbacks):
 | On error | A task, batch, or worker fails | The error, the affected item or batch |
 | On batch exceeded | An item does not fit the current batch | Batch size or weight, the carried-over item |
 | On max batch | A batch closes because it hit its bound | Batch size, and weight where applicable |
+| On compensation error | Accumulator compensation fails after callers have settled | Affected items and the compensation error |
 
 Rules:
 
@@ -93,7 +94,7 @@ API, not a debug aid.
 
 | Snapshot field | Exposed by |
 | --- | --- |
-| Queue depth, and queued weight where applicable | Every queue owner |
+| Queue depth, waiting-caller count, and applicable queued cost/weight | Every controller queue owner |
 | In-flight count | `RateController`, `GroupedRateController` |
 | Current and desired worker count | `ParallelWorkers` and everything built on it |
 | Per-group in-flight and allocation | `GroupedRateController` |
