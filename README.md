@@ -32,7 +32,7 @@ primary package, not inside it.
 
 | Language | Primary package | Workspace model | Test runner |
 | --- | --- | --- | --- |
-| C# | `csharp/src/Limitful.Core` | One solution, multiple projects | xUnit v3 |
+| C# | `csharp/Limitful.Core` | Direct sibling projects in one solution | xUnit v3 |
 | TypeScript | `typescript/main` | npm workspaces + Turborepo | Vitest |
 | Rust | `rust/main` | Cargo workspace | Rust test harness |
 | Go | `go/main` | Go module with sibling packages | `go test` |

@@ -4,7 +4,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Limitful.Core\Limitful.Core.csproj" />
+    <ProjectReference Include="..\Limitful.Core\Limitful.Core.csproj" />
     <PackageReference Include="coverlet.collector">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
