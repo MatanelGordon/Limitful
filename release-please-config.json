@@ -10,6 +10,7 @@
       "component": "csharp-core",
       "include-component-in-tag": true,
       "include-v-in-tag": true,
+      "initial-version": "0.1.0",
       "version-file": "version.txt",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
@@ -26,6 +27,7 @@
       "component": "typescript-limitful",
       "include-component-in-tag": true,
       "include-v-in-tag": true,
+      "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {
@@ -41,6 +43,7 @@
       "component": "rust-limitful",
       "include-component-in-tag": true,
       "include-v-in-tag": true,
+      "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {
@@ -57,6 +60,7 @@
       "tag-separator": "/",
       "include-component-in-tag": true,
       "include-v-in-tag": true,
+      "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md"
     },
     "python/main": {
@@ -65,6 +69,7 @@
       "component": "python-limitful",
       "include-component-in-tag": true,
       "include-v-in-tag": true,
+      "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {

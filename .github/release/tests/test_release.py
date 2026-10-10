@@ -50,6 +50,29 @@ class ReleaseMetadataTests(unittest.TestCase):
                 release_ready=True,
             )
 
+    def test_release_please_config_matches_catalog_and_never_tags(self) -> None:
+        catalog = release.load_catalog(self.repository_root)
+        config = json.loads(
+            (self.repository_root / "release-please-config.json").read_text(encoding="utf-8")
+        )
+
+        self.assertTrue(config["separate-pull-requests"])
+        self.assertTrue(config["skip-github-release"])
+        self.assertEqual(set(config["packages"]), set(catalog.packages))
+        for package_id, package in catalog.packages.items():
+            release_config = config["packages"][package_id]
+            separator = release_config.get("tag-separator", "-")
+            expected_prefix = f"{release_config['component']}{separator}v"
+            self.assertTrue(release_config["include-component-in-tag"])
+            self.assertTrue(release_config["include-v-in-tag"])
+            self.assertEqual(release_config["initial-version"], "0.1.0")
+            self.assertEqual(expected_prefix, package.tag_prefix)
+            if package.ecosystem != "go":
+                self.assertEqual(release_config["package-name"], package.package_name)
+            self.assertEqual(
+                f"{package.path}/{release_config['changelog-path']}", package.changelog
+            )
+
     def test_unknown_package_is_rejected(self) -> None:
         catalog = release.load_catalog(self.repository_root)
 

@@ -54,8 +54,12 @@ Before any mutating run:
 4. In **Settings → Actions → General**, allow GitHub Actions to create pull
    requests. Keep the repository token at its narrow default; each workflow job
    declares its own permissions.
-5. Protect `master` so changes to the paths in `.github/CODEOWNERS` require owner
-   review. Add tag rules for `csharp-core-v*`, `typescript-limitful-v*`,
+5. Protect `master` from direct collaborator pushes and use the checked-in
+   `.github/CODEOWNERS` for the release control plane. If another maintainer can
+   review your changes, require code-owner approval. GitHub does not allow a pull
+   request author to approve their own pull request, so a solo-owner repository
+   must instead restrict merge access to the owner and rely on required checks.
+   Add tag rules for `csharp-core-v*`, `typescript-limitful-v*`,
    `rust-limitful-v*`, `python-limitful-v*`, and `go/v*` that prevent tag updates
    and deletion. Do not add a creation restriction that blocks this workflow's
    `GITHUB_TOKEN`.
@@ -91,12 +95,13 @@ exact clean `master` commit, run the same local checks, and stage the generated
 tarball from an interactive npm login:
 
 ```sh
+limitful_root=$PWD
 mkdir -p .release-artifacts/npm
 npm --prefix typescript ci
 npm --prefix typescript run ci --workspace limitful
 npm --prefix typescript pack --workspace limitful --ignore-scripts \
-  --pack-destination ../.release-artifacts/npm
-npm stage publish .release-artifacts/npm/limitful-*.tgz --access public
+  --pack-destination "$limitful_root/.release-artifacts/npm"
+npm stage publish "$limitful_root"/.release-artifacts/npm/limitful-*.tgz --access public
 ```
 
 Inspect and approve it in npmjs.com's **Staged Packages** tab with OTP. Configure
