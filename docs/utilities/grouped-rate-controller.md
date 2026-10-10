@@ -177,7 +177,7 @@ requires a separately specified reservation allocator and remains deferred.
 | Per-group timeouts and capacity | per-group values | Different backpressure per group |
 | Worker-count sampler | `ctx -> number` | Inherited from [ParallelWorkers](./parallel-workers.md) |
 | Clock / scheduler | injected | Deterministic arbitration tests |
-| Synchronization provider | injected | Coordinates group and global shared ceilings across instances ([SynchronizationProvider](./synchronization-provider.md#groupedratecontroller)) |
+| Synchronization provider | injected | Coordinates group and global ceilings across instances, exactly with an accurate synchronizer or by division with a loose one ([SynchronizationProvider](./synchronization-provider.md#groupedratecontroller), [D-204](../decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)) |
 | Synchronization scope | caller-defined string | Namespaces one shared grouped-controller domain |
 
 ## Lifecycle, cancellation, and timeouts

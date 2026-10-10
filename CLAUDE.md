@@ -33,7 +33,7 @@ and the disagreement is a bug in this file.
 | SynchronizationProvider — cross-instance coordination and capabilities | [docs/utilities/synchronization-provider.md](./docs/utilities/synchronization-provider.md) |
 | Probe — periodic measurement with freshness metadata | [docs/utilities/probe.md](./docs/utilities/probe.md) |
 | Queue, overflow, timeout stages, cancellation | [docs/subsystems/queue-and-admission.md](./docs/subsystems/queue-and-admission.md) |
-| RedisSynchronizationProvider mechanics, liveness, outage behavior | [docs/subsystems/RedisSynchronizationProvider.md](./docs/subsystems/RedisSynchronizationProvider.md) |
+| Redis synchronization (`RedisHealthcheck`, `RedisSynchronization`, `LooseRedisSynchronization`) | [docs/subsystems/redis-synchronization.md](./docs/subsystems/redis-synchronization.md) |
 | Events, metrics, the optional OTel package | [docs/subsystems/observability.md](./docs/subsystems/observability.md) |
 | Documentation site contract | [docs/site/SPEC.md](./docs/site/SPEC.md) |
 
@@ -50,9 +50,11 @@ supervision → outcome classification.
 `Limitful` ([D-162](./docs/decisions.md#d-162-limitful-is-the-canonical-project-and-library-name)).
 Controllers depend on the backend-neutral
 [`SynchronizationProvider`](./docs/utilities/synchronization-provider.md);
-[`redis-coordination.md`](./docs/subsystems/RedisSynchronizationProvider.md) is the concrete
-Redis provider's technical deep dive, not a competing public contract
-([D-163](./docs/decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
+[redis-synchronization.md](./docs/subsystems/redis-synchronization.md) specifies the
+Redis implementations (`RedisHealthcheck`, accurate `RedisSynchronization`, loose
+`LooseRedisSynchronization`), not a competing public contract
+([D-204](./docs/decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer),
+[D-163](./docs/decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
 [D-164](./docs/decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ## API philosophy
@@ -158,9 +160,15 @@ one is never a local decision.
 - The only announced non-executions are cancel-pending shutdown, an expired
   queue-wait timeout, and cancellation of the job's own task.
 - **Every queue is bounded.** Overflow rejects by default; waiting is opt-in.
-- **`N` is the hard global in-flight ceiling.** A sampled worker count divides
-  that budget and is clamped to it. A documented provider-specific degraded mode
-  may weaken the coordinated guarantee only within its stated bound.
+- **`N` is the hard in-flight ceiling.** A sampled worker count divides that
+  budget and is clamped to it. Across coordinated instances, an accurate synchronizer
+  (`XSynchronization`) keeps `N` exact with a backend call per item; a loose one
+  (`LooseXSynchronization`) divides `N` by the live instances with no per-item
+  call, so the total can briefly exceed `N` while membership changes propagate
+  ([D-204](./docs/decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)). During a synchronization outage the
+  application keeps running on a finite local share, weakening the guarantee
+  only by a bounded, reported amount
+  ([D-199](./docs/decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)).
 - **Cancellation is terminal** — never retried, never overridable by a predicate.
 - **A retrying job holds no slot during backoff.**
 - A timed-out or cancelled queued item **never executes later**.

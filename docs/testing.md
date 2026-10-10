@@ -94,7 +94,7 @@ Every business test case has a **stable ID**: a component prefix plus a number
 | `WAA` | [WeightedAsyncAccumulator](./utilities/weighted-async-accumulator.md) |
 | `RD` | [RetryDecorator](./utilities/retry-decorator.md) |
 | `QA` | [Queue and admission](./subsystems/queue-and-admission.md) |
-| `RDS` | [Redis coordination](./subsystems/RedisSynchronizationProvider.md) |
+| `RDS` | [Redis coordination](./subsystems/redis-synchronization.md) |
 | `LC` | [Lifecycle and disposal](./architecture.md#lifecycle-and-disposal) |
 | `OB` | [Observability](./subsystems/observability.md) |
 | `ER` | [Shared error contract](./subsystems/controller-contract.md#error-contract) |
@@ -135,7 +135,7 @@ If a test needs a seam that does not exist for users, the seam is wrong.
 | **Scripted retry predicate** | `shouldRetry` | Which failures retry, and that cancellation ignores the predicate |
 | **Gated job function** | The user function | Holding jobs in flight to observe ceiling enforcement |
 | **Scripted synchronization provider** | `SynchronizationProvider` | Capability matching, atomic/idempotent claims, uncertain outcomes, health transitions, and recovery |
-| **In-memory fake Redis adapter** | The `RedisSynchronizationProvider` adapter ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) | Redis sets, cardinality, staleness, scripts, slotting, **and induced outages** — no real Redis in the business suite |
+| **In-memory fake Redis adapter** | The Redis adapter ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) | Redis sets, cardinality, staleness, scripts, slotting, **and induced outages** — no real Redis in the business suite |
 | **Event recorder** | Event handlers | Which events fired, in what order, with what payloads |
 | **Small configured limits** | Production-sized limits | Queue-full, batch-full, and over-weight paths, without volume |
 
@@ -506,36 +506,60 @@ Redis command or storage layout.
 | SP-011 | A degraded local approximation is identified as degraded and is never reported as a hard global guarantee | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | SP-012 | Recovery reconciles configuration epoch, leases, and stale membership before allowing capacity to increase | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
 | SP-013 | `ThroughputController` rejects a provider lacking authoritative coordination time | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
-| SP-014 | `GroupedRateController` rejects a provider that can claim one limit atomically but cannot claim group and global limits together | [D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) | Ready |
+| SP-014 | With an accurate synchronizer, `GroupedRateController` rejects one that can claim one limit atomically but cannot claim group and global limits together | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
 | SP-015 | A stale configuration epoch may preserve a stricter allowance but never raises capacity from obsolete configuration | [synchronization-provider.md](./utilities/synchronization-provider.md#throughputcontroller) | Ready |
 | SP-016 | Provider operations carry permission/shared state only; executable payloads and callbacks never cross the boundary | [D-161](./decisions.md#d-161-explicitly-out-of-scope) | Ready |
 | SP-017 | Controller construction and operation use semantic provider operations and expose no backend client or raw command surface | [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract) | Ready |
+| SP-018 | While the provider is degraded, every coordinated utility keeps admitting work on a finite local share (last known budget divided by last known instances); none fails closed | [D-199](./decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application) | Ready |
+| SP-019 | A degraded `ThroughputController` continues at its divided share of the global rate, never at the full global rate | [D-199](./decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application) | Ready |
+| SP-020 | Configuring coordination fails when the provider does not declare membership and health | [D-199](./decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application) | Ready |
+| SP-021 | An instance that starts during an outage uses the provider's outage default limit, or the utility's normal configured limit when none is set, until coordination returns | [D-199](./decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application) | Ready |
+| SP-022 | Every healthy instance refreshes its own heartbeat and removes peers whose heartbeat is stale, together with their claims and leases; no single instance is responsible | [D-200](./decisions.md#d-200-every-provider-runs-a-distributed-peer-healthcheck) | Ready |
+| SP-023 | Two instances cleaning up the same dead peer at once leave one consistent result | [D-200](./decisions.md#d-200-every-provider-runs-a-distributed-peer-healthcheck) | Ready |
+| SP-024 | With a loose synchronizer, a coordinated `RateController` makes no backend call per item; each instance enforces its local share of `N` | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
+| SP-025 | With a loose synchronizer, when membership changes, the total in flight across instances exceeds `N` only until the next membership sample | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
+| SP-026 | With a loose synchronizer, a coordinated `GroupedRateController` makes no backend call per item; each instance enforces its share of every group limit and of the global ceiling | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
+| SP-027 | Every incoming item gets an admission check from its synchronizer before it starts; a denied item stays in the utility's bounded queue | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
+| SP-028 | With no synchronization provider (`null`), a utility makes no synchronization call and no synchronizer admission check | [D-207](./decisions.md#d-207-no-synchronization-by-default) | Ready |
+| SP-029 | With an accurate synchronizer and a healthy backend, the total in flight across instances never exceeds `N` | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
+| SP-030 | An accurate synchronizer that loses its backend continues on the loose local share and returns to per-item claims after recovery and reconciliation | [D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) | Ready |
+| SP-031 | Two synchronizers in one process use the one per-process healthcheck: one heartbeat, one membership entry, the same live count | [D-205](./decisions.md#d-205-the-healthcheck-is-a-separate-shareable-abstraction) | Ready |
+| SP-032 | A backend call that takes longer than the timeout (default 500 ms) marks the backend down and the synchronizer continues on its local share | [D-208](./decisions.md#d-208-backend-calls-time-out-after-500-ms-and-a-timeout-means-the-backend-is-down) | Ready |
+| SP-033 | The backend call timeout is configurable | [D-208](./decisions.md#d-208-backend-calls-time-out-after-500-ms-and-a-timeout-means-the-backend-is-down) | Ready |
+| SP-034 | An item whose claim call timed out proceeds under the local share, and its claim is reconciled once after recovery | [D-208](./decisions.md#d-208-backend-calls-time-out-after-500-ms-and-a-timeout-means-the-backend-is-down) | Ready |
 
-### RedisSynchronizationProvider (RDS)
+### Redis synchronization (RDS)
 
 All cases run against the in-memory fake adapter with an injected clock.
 
 | ID | Case | Source | Status |
 | --- | --- | --- | --- |
-| RDS-001 | Membership uses set add/remove, and the effective count is set cardinality | [D-082](./decisions.md#d-082-distributed-counting-is-set-based-never-increment-or-decrement) | Ready |
+| RDS-001 | Membership uses a sorted set with add/remove by ID, and the effective count is its cardinality | [D-082](./decisions.md#d-082-distributed-counting-is-set-based-never-increment-or-decrement) | Ready |
 | RDS-002 | A repeated add of the same ID is idempotent — the count does not change | [INV-11](./architecture.md#invariants) | Ready |
 | RDS-003 | A repeated remove of the same ID is idempotent | [INV-11](./architecture.md#invariants) | Ready |
 | RDS-004 | No increment or decrement command is ever issued | [D-082](./decisions.md#d-082-distributed-counting-is-set-based-never-increment-or-decrement) | Ready |
 | RDS-005 | An entity only removes its own ID, except via staleness-based disqualification | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
-| RDS-006 | Two Redis-provider consumers in divided-allocation mode divide `N`; their healthy local allowances do not sum above `N` | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
-| RDS-007 | The heartbeat refreshes last-seen on the configured interval | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
-| RDS-008 | Any peer can disqualify a member whose last-seen has gone stale; the count drops | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
+| RDS-006 | Two `LooseRedisSynchronization` instances divide `N`; their healthy local allowances do not sum above `N` | [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization) | Ready |
+| RDS-007 | The heartbeat refreshes the instance's score in the membership sorted set on the configured interval | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
+| RDS-008 | Any peer can remove members whose score is older than the staleness threshold; the count drops | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
 | RDS-009 | Clean shutdown removes the process's own members | [D-086](./decisions.md#d-086-liveness-is-a-distributed-self-cleaning-protocol) | Ready |
-| RDS-010 | While the adapter is failing, a configured divided-allocation consumer keeps using only its finite degraded local share | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
+| RDS-010 | While the adapter is failing, a coordinated utility keeps using only its finite degraded local share | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | RDS-011 | During that outage, the last sampled count is used to divide the allowance locally and degradation is observable | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | RDS-012 | Frozen membership: a newly appearing worker adds no capacity while degraded | [D-084](./decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined) | Ready |
 | RDS-013 | Frozen membership: a removal may reduce the allocation and never increases it again while degraded | [D-084](./decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined) | Ready |
 | RDS-014 | On recovery, sampling and reconciliation complete before the allocation re-normalizes upward | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
-| RDS-015 | Divided-allocation overshoot during an outage is bounded by membership drift, not unbounded | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
+| RDS-015 | Overshoot during an outage is bounded by membership drift, not unbounded | [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) | Ready |
 | RDS-016 | Every key carries the configured prefix | [D-087](./decisions.md#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix) | Ready |
-| RDS-017 | Single-key operations impose no hash tag; multi-key operations use co-located keys | [D-087](./decisions.md#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix) | Ready for single-key; **Blocked** for the liveness-scan pairing |
+| RDS-017 | Single-key operations impose no hash tag; multi-key operations use co-located keys | [D-087](./decisions.md#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix) | Ready |
 | RDS-018 | Non-frozen membership behavior during an outage | [D-084](./decisions.md#d-084-membership-during-an-outage-is-configurable-frozen-is-defined) | **Blocked** — not decided |
 | RDS-019 | Division of `N` across processes, including integer remainders | — | **Blocked** — not decided |
+| RDS-020 | Heartbeat scores use Redis server time, never the instance's local clock | [D-201](./decisions.md#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set) | Ready |
+| RDS-021 | Removing an evicted peer's claims and leases stored in other keys | [D-201](./decisions.md#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set) | **Blocked** — not decided |
+| RDS-022 | `RedisSynchronization` admits an item only through one atomic script that checks the claim count against the limit and adds the item's claim ID; no `INCR` | [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization) | Ready |
+| RDS-023 | Releasing a claim removes its ID; repeating the release is harmless | [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization) | Ready |
+| RDS-024 | Peer cleanup removes a dead instance's claims | [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization) | Ready for the behavior; key layout out of scope until implementation |
+| RDS-025 | `LooseRedisSynchronization` issues no Redis command for an individual item; only healthcheck commands | [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization) | Ready |
+| RDS-026 | The accurate grouped claim checks the group limit and the global ceiling together | [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization) | Deferred — key layout out of scope until implementation |
 
 ### Observability (OB)
 

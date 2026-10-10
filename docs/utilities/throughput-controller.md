@@ -737,6 +737,12 @@ An optional [SynchronizationProvider](./synchronization-provider.md) coordinates
 permission, not executable jobs. Queues and user functions remain process-local,
 so global queue order and global priority are not promised.
 
+The user chooses an accurate synchronizer (`XSynchronization`) or a loose one
+(`LooseXSynchronization`) ([D-204](../decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)). With a loose
+synchronizer each process paces locally at the global rate divided by the live
+instance count, with no backend call per item. The rest of this section describes
+the accurate case.
+
 Timed global permission requires an atomic provider operation that:
 
 1. reads authoritative coordination time;
@@ -754,28 +760,24 @@ interface is not enough to guarantee correctness.
 
 ### Synchronization outage
 
-There is an unavoidable contract choice: unconditional fail-open availability
-cannot also guarantee a hard external quota during a partition.
+Losing the synchronization backend never stops the application
+([D-199](../decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)).
+While the provider is degraded, each process continues with a finite local share
+of the global rate: the last known global rate divided by the last known number
+of instances. A global 1,000 jobs/s across 4 instances continues at 250 jobs/s per
+instance. A process must never copy the entire last-known global reservoir into
+itself. Frozen membership cannot give newly appearing processes extra degraded
+capacity. Overclock is disabled immediately, and local adaptation may only reduce
+a share, never raise it.
 
-A safe fail-open design must use finite local credit leases or shares allocated
-before the outage; it must never copy the entire last-known global reservoir into
-every process. Frozen membership cannot give newly appearing processes extra
-degraded capacity. Overclock is disabled immediately, and local adaptation may
-only reduce a leased share, never raise it.
+The accepted cost is a bounded overshoot of the global quota during the outage.
+The controller never describes a degraded limit as globally hard. Snapshots and
+events expose degradation, the local share or lease balance, configuration epoch,
+and recovery.
 
-If a process starts during an outage with no lease, the choices are:
-
-- wait or reject until coordination returns, preserving the global quota; or
-- use an explicitly configured emergency local rate, preserving availability
-  but weakening the global guarantee by a stated bound.
-
-There is no project-wide unconditional fail-open rule: the provider reports
-degradation and this controller owns the product-level choice
-([D-163](../decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
-[D-164](../decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
-The exact default choice for `ThroughputController` remains unresolved. The
-controller must never describe a degraded limit as globally hard. Snapshots and
-events expose degradation, lease balance, configuration epoch, and recovery.
+A process that starts during an outage has no last known share. It uses the outage default rate configured on the provider, or, when none is
+configured, the controller's own configured rate, until coordination returns
+([D-199](../decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)).
 
 Adaptive decisions in distributed mode are versioned and shared. Independent
 per-process overclock would multiply the global rate and is forbidden. A stale
@@ -894,7 +896,8 @@ only surface syntax and runtime primitives differ.
 10. Policy, signal-provider, and event-handler failures cannot corrupt state,
     fail unrelated jobs, or raise throughput.
 11. User functions and callbacks never execute under the scheduler lock.
-12. Healthy distributed admission uses one atomic global reservation protocol.
+12. With an accurate synchronizer, healthy distributed admission uses one atomic
+    global reservation protocol.
     Fail-open operation is visibly degraded and never described as a hard global
     guarantee.
 13. The same normalized inputs, virtual time, and policy decisions produce the
@@ -979,7 +982,12 @@ failover, and partition recovery.
     maximum lease size and unused-lease expiry?
 28. How are strict global pacing and cross-process network latency reconciled?
 29. What measurable overshoot bound applies in fail-open mode?
-30. Which degraded-mode default balances fail-closed quota safety against an
-    explicitly bounded emergency local rate?
-31. What happens when a new process starts during an outage with no local lease?
+30. ~~Which degraded-mode default balances fail-closed quota safety against an
+    explicitly bounded emergency local rate?~~ **Resolved:** continue on the finite
+    local share; failing closed is not available
+    ([D-199](../decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)).
+31. ~~What happens when a new process starts during an outage with no local
+    lease?~~ **Resolved:** it uses the provider's outage default rate, or the controller's
+    own configured rate
+    ([D-199](../decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)).
 32. Which lifecycle, priority, and queue metrics are local versus global?

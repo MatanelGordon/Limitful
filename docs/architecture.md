@@ -139,7 +139,7 @@ The worker count never raises the ceiling. It only **divides a fixed budget**
 | [Shared controller contract](./subsystems/controller-contract.md) | Submission, `JobOptions`, advisory admission queries, deadline-aware admission | Capacity semantics — each controller defines what a slot or credit means ([D-110](./decisions.md#d-110-a-shared-controller-contract-owns-submission-job-options-and-admission-queries)) |
 | [AdaptiveCapacityPolicy](./utilities/adaptive-capacity-policy.md) | Opt-in capacity adaptation, outcome classification, overclock safeguards | Raising a hard ceiling; being enabled implicitly ([D-142](./decisions.md#d-142-adaptive-presets-are-opt-in-and-the-congestion-preset-comes-later)) |
 | [SynchronizationProvider](./utilities/synchronization-provider.md) | Cross-instance permission and shared state, capability declaration | Executable work, payload transport, or naming a backend in a controller API ([D-150](./decisions.md#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)) |
-| [RedisSynchronizationProvider](./subsystems/RedisSynchronizationProvider.md) | Redis sets/claims, liveness, degraded divided-allocation fallback, keys/scripts, cluster slotting | The generic coordination contract or controller API; those belong to `SynchronizationProvider` ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) |
+| [Redis synchronization](./subsystems/redis-synchronization.md) | `RedisHealthcheck`, accurate `RedisSynchronization`, loose `LooseRedisSynchronization`: sets/claims, liveness, outage fallback, keys/scripts, cluster slotting | The generic coordination contract or controller API; those belong to `SynchronizationProvider` ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)) |
 | [Observability](./subsystems/observability.md) | Raw events, metrics snapshots, sampling event | Opinionated telemetry — OTel lives in a separate opt-in package ([D-091](./decisions.md#d-091-otel-is-a-separate-opt-in-package-per-language)) |
 
 ### Dependency rules
@@ -171,7 +171,7 @@ These hold in every language. A change to any of them is a specification change
 | **INV-1** | A queued job is never dropped unannounced, and never by dropping the oldest. |
 | **INV-2** | The only ways a queued job leaves without executing are announced to the caller: cancel-pending shutdown, an expired queue-wait timeout, or cancellation of the job's own task. |
 | **INV-3** | Every internal queue is bounded, with a configurable capacity, timeout set, and overflow strategy. |
-| **INV-4** | During healthy coordinated operation, the configured `N` is the hard global in-flight ceiling. A sampled worker count only divides that budget and is clamped to `N`. A provider-specific degraded mode may weaken that guarantee only within its documented bound and must report the degradation ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)). |
+| **INV-4** | Within a process, the configured `N` is the hard in-flight ceiling. A sampled worker count only divides that budget and is clamped to `N`. Across coordinated instances, an accurate synchronizer keeps `N` exact; with a loose synchronizer each instance enforces its own share and the total can briefly exceed `N` while membership changes propagate ([D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)). During a synchronization outage each instance continues on a finite, reported local share, which may exceed the guarantee by a bounded amount ([D-199](./decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)). |
 | **INV-5** | Cancellation is terminal. It is never retried and never overridden by a user predicate. |
 | **INV-6** | A retrying job holds no concurrency slot while waiting between attempts. |
 | **INV-7** | An item that has timed out while queued, or whose task was cancelled, never executes later — it is removed, not merely abandoned by its caller. |
@@ -381,7 +381,7 @@ Rules that hold in both shutdown modes:
 5. **Disposal is ordered:** refuse new work → settle queued work per mode → drain
    workers → stop the heartbeat and distributed membership (graceful removal, see
    synchronization provider membership/claims (with concrete mechanics such as
-   [Redis](./subsystems/RedisSynchronizationProvider.md)) → release
+   [Redis](./subsystems/redis-synchronization.md)) → release
    resources.
 6. **Nothing survives the process** ([INV-14](#invariants)). Durable queues are
    out of scope; a caller who needs them layers their own store in front.
@@ -421,9 +421,9 @@ flowchart LR
 The neutral semantic operations, capabilities, idempotency, and degradation
 signals live in
 [synchronization-provider.md](./utilities/synchronization-provider.md). Redis
-sets, scripts, liveness, divided-allocation fail-open behavior, and cluster key
+sets, scripts, liveness, the Redis mechanics of the outage fallback, and cluster key
 slotting live in the concrete
-[RedisSynchronizationProvider](./subsystems/RedisSynchronizationProvider.md) deep dive
+[Redis synchronization](./subsystems/redis-synchronization.md) deep dive
 ([D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 
 ## Observability seams
@@ -485,6 +485,6 @@ utility-level items, is in [decisions.md § Unresolved](./decisions.md#unresolve
 | Disposition of callers awaiting insertion when shutdown begins | [queue-and-admission.md](./subsystems/queue-and-admission.md) |
 | Which non-controller utilities expose controller-style bounded wait mode | [queue-and-admission.md](./subsystems/queue-and-admission.md) |
 | Whether `GroupedRateController` is one shared admission layer or one `RateController` per group plus an arbitrator | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md) |
-| Non-frozen membership policy during a Redis outage | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md) |
-| Whether the membership set and last-seen key share a hash tag | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md) |
+| Non-frozen membership policy during a Redis outage | [redis-synchronization.md](./subsystems/redis-synchronization.md) |
+| How an evicted peer's claims in other keys are removed and slotted, and whether Redis Streams are used | [redis-synchronization.md](./subsystems/redis-synchronization.md) |
 | Build order for the accepted-but-unbuilt features | [D-160](./decisions.md#d-160-roadmap-order-keyed-registry-then-shared-job-options-then-supervision-then-outcome-classification) |

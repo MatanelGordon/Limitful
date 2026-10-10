@@ -57,7 +57,7 @@ limiter would be entirely different logic and remains
 
 ### D-002 N is the hard global in-flight ceiling
 
-**Status:** Accepted · **Source:** Q&A Q2; `CLAUDE.md` § RateController
+**Status:** Accepted, clarified for coordinated operation by [D-202](#d-202-coordinated-ratecontroller-uses-divided-allocation-only) · **Source:** Q&A Q2; `CLAUDE.md` § RateController
 
 **Context.** `RateController` runs on `ParallelWorkers`, whose worker count is
 sampled from a user function. If that count drove capacity, a sampler could
@@ -69,9 +69,11 @@ budget** among workers; it must never increase total allowed in-flight work, and
 any requested count is clamped to `N`.
 
 **Consequences.** Enforcement lives in slot acquisition, never in trusting the
-worker count. A provider-specific degraded mode may weaken the coordinated
-guarantee only within a documented bound and must report the degradation
-([D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
+worker count. Across coordinated instances, an accurate synchronizer keeps `N` exact; with a
+loose synchronizer each instance enforces its own share and the total can briefly
+exceed `N` while membership changes propagate ([D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)). During a synchronization outage the guarantee weakens to a
+finite, reported local share, exceeded only by a bounded amount
+([D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application)).
 
 ### D-003 Queues are always bounded
 
@@ -592,7 +594,7 @@ the set**, which is far more accurate and retry-safe than a mutated number.
 
 ### D-083 A Redis outage fails open to local continuation
 
-**Status:** Superseded in generality by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract) · **Source:** Q&A Q1
+**Status:** Accepted; narrowed by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract), then restored as a rule for every provider by [D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application) · **Source:** Q&A Q1
 
 **Decision.** Redis must never become a dependency whose outage disables the
 application. Each process periodically samples the active worker/process count,
@@ -635,7 +637,7 @@ operations.
 
 ### D-086 Liveness is a distributed self-cleaning protocol
 
-**Status:** Accepted as Redis-provider mechanics, clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract), with open items · **Source:** `CLAUDE.md` § Redis Distributed Mode
+**Status:** Accepted, with open items; generalized to every provider by [D-200](#d-200-every-provider-runs-a-distributed-peer-healthcheck); Redis representation set by [D-201](#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set) · **Source:** `CLAUDE.md` § Redis Distributed Mode
 
 **Decision.** Three mechanisms keep stale IDs from crashed instances from
 inflating the set forever: **graceful removal on clean death**; a **heartbeat /
@@ -661,8 +663,8 @@ isolate coordination. (3) **Slot selectively, not globally**: keys only ever
 touched on their own slot naturally; impose hash tags only where an operation
 genuinely reads multiple keys together, such as the liveness scan.
 
-**Open.** Whether the membership set and the last-seen timestamp key share a hash
-tag — undecided, pending the final counting mechanism.
+**Open.** ~~Whether the membership set and the last-seen timestamp key share a hash
+tag.~~ **Resolved** by [D-201](#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set): they are one sorted set.
 
 ## Observability
 
@@ -1170,12 +1172,13 @@ must never emulate a strict guarantee with eventual local guesses.
 
 **Consequences.** `ThroughputController` cannot be coordinated without
 authoritative coordination time, because pacing is a statement about *when*.
-`GroupedRateController` needs a claim that checks the group limit and the global
+~~`GroupedRateController` needs a claim that checks the group limit and the global
 limit **together**, so a provider offering only single-limit claims must be
 rejected for grouped use even though it would serve a plain `RateController`. A
 PostgreSQL provider that cannot express the grouped atomic claim is rejected at
 startup instead of quietly degrading a tenant-isolation guarantee an operator
-believes is enforced.
+believes is enforced.~~ Superseded by [D-203](#d-203-coordinated-groupedratecontroller-uses-divided-allocation-only), then restored for accurate
+synchronizers by [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer).
 
 **Open.** Whether a capability can be declared at a *level* — "atomic claim,
 single limit only" versus "multi-limit" — rather than as a boolean.
@@ -1265,6 +1268,11 @@ work is accepted when the provider cannot supply them
 The provider coordinates permission and shared state, never executable payloads
 or a durable job queue ([D-161](#d-161-explicitly-out-of-scope)).
 
+**Confirmed by the user (2026-10-10).** Coordination is per utility; not every
+utility has to be coordinated. By default there is no synchronization provider at all (`null`)
+([D-207](#d-207-no-synchronization-by-default)): users who use controllers the simple way never see or
+configure a provider.
+
 **Consequences.** Backend packages implement this contract. The old statement
 that "enabling Redis coordinates every utility" no longer defines the API or
 activation model. A backend-specific adapter may still be injected into its
@@ -1272,7 +1280,7 @@ concrete provider, but it never appears in a controller constructor or contract.
 
 ### D-164 Redis coordination is a concrete provider under the neutral contract
 
-**Status:** Accepted, with inherited open items · **Source:** User decision; clarifies [D-082](#d-082-distributed-counting-is-set-based-never-increment-or-decrement) through [D-087](#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix)
+**Status:** Accepted, with inherited open items; its narrowing of D-083 is superseded by [D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application) · **Source:** User decision; clarifies [D-082](#d-082-distributed-counting-is-set-based-never-increment-or-decrement) through [D-087](#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix)
 
 **Decision.** `RedisSynchronizationProvider` is a concrete implementation of
 `SynchronizationProvider`, not a competing generic coordination subsystem. Its
@@ -1296,6 +1304,216 @@ D-086's self-cleaning liveness protocol, and D-087's cluster slotting rules rema
 valid Redis-provider mechanics. Their existing open choices remain open; this
 record does not guess the non-frozen policy, allocation remainder algorithm,
 multi-key layout, adapter interface, or timing defaults.
+
+### D-199 Losing the synchronization backend never stops the application
+
+**Status:** Accepted, with open items · **Source:** User decision (2026-10-10); restores [D-083](#d-083-a-redis-outage-fails-open-to-local-continuation) for every provider and supersedes D-164's narrowing of it
+
+**Context.** [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)
+narrowed D-083's fail-open rule to the Redis provider's divided-allocation mode
+and let each controller choose its own outage policy, including failing closed.
+That made the outage guarantee depend on the backend and the controller, and
+reopened the fail-closed option that [S-008](#s-008-failing-closed-during-a-redis-outage)
+rejected.
+
+**Decision.** An outage of the synchronization backend never stops the
+application, for every provider and every coordinated utility. This is part of
+the neutral `SynchronizationProvider` contract, not a Redis mechanic. While the
+provider is degraded, each coordinated utility continues locally with a **finite
+local share**: the last known global budget divided by the last known number of
+instances. Membership during the outage follows
+[D-084](#d-084-membership-during-an-outage-is-configurable-frozen-is-defined).
+The utility reports the degraded state and never describes its local share as a
+globally enforced limit. On recovery, the provider reconciles stale membership,
+leases, and configuration epochs before any share grows again. Failing closed is
+not an available policy.
+
+Every provider must therefore report health (healthy, degraded/uncertain,
+recovered), supply membership so a last known instance count exists when an
+outage begins, and reconcile before re-normalizing upward.
+
+**Consequences.** A bounded overshoot of the shared limit is accepted: instances
+that start during an outage are not counted until the backend recovers.
+Membership and health become required capabilities for every coordinated
+utility. `ThroughputController` divides its rate the same way (a global 1,000
+jobs/s across 4 instances continues at 250 jobs/s per instance) and never copies
+the whole global reservoir into each process.
+
+**Instances that start during an outage** (user decision, 2026-10-10). An
+instance of the user's service that starts while the backend is unreachable has
+no last known share. It uses a **default limit supplied by the user** until the
+backend recovers and it receives a normal share.
+
+A limit always exists, so nothing has to fail at startup: the provider may be
+given its own outage default limit, and when it is not, the instance falls back
+to the utility's normal configured limit (for example `RateController`'s `N`),
+which the utility's options already require. Falling back to the full normal
+limit is part of the accepted bounded overshoot.
+
+### D-200 Every provider runs a distributed peer healthcheck
+
+**Status:** Accepted · **Source:** User decision (2026-10-10); generalizes [D-086](#d-086-liveness-is-a-distributed-self-cleaning-protocol) from Redis to every provider
+
+**Decision.** The `SynchronizationProvider` contract includes a healthcheck of the
+instances in each scope. Each instance refreshes its own heartbeat on a
+configurable interval. In addition, **every healthy instance checks the other
+instances' heartbeats and cleans up the state of any instance whose heartbeat has
+gone stale**: its membership and everything it owned (claims, leases). Any healthy
+instance may do this, so dead state is removed as long as one instance is alive;
+there is no single reaper and no leader election. Cleanup is idempotent, so two
+instances removing the same dead peer is harmless. Heartbeats are timestamped with
+authoritative coordination time, never an instance's local clock.
+
+**Consequences.** Liveness is no longer a Redis-only mechanic; every future
+provider (PostgreSQL, gRPC or other) must implement the same peer healthcheck.
+
+### D-201 Redis membership and heartbeats live in one sorted set
+
+**Status:** Accepted, with open items · **Source:** User decision (2026-10-10); implements [D-200](#d-200-every-provider-runs-a-distributed-peer-healthcheck) for Redis and resolves the open item of [D-087](#d-087-cluster-compliance-requires-deliberate-selective-slotting-and-a-user-prefix)
+
+**Decision.** The Redis provider implements the healthcheck with a **sorted set
+(ZSET)** per scope: the member is the instance ID and the score is the time of its
+last heartbeat, taken from Redis server time. A heartbeat refreshes the score; any
+instance removes stale peers by removing members whose score is older than the
+staleness threshold; the live count is the sorted set's cardinality. Membership
+remains a set of unique IDs, so [D-082](#d-082-distributed-counting-is-set-based-never-increment-or-decrement)
+still holds. **Redis Streams** may be added if needed, for example to announce
+joins and departures so peers re-divide immediately instead of at the next sample.
+
+**Consequences.** Membership and last-seen are the same key, so the liveness scan
+touches one key and needs no hash tag; D-087's open item is resolved.
+
+**Open.** Whether Redis Streams are used, and for what. How the claims and leases
+of an evicted peer are removed when they live in other keys, and how those keys
+are slotted.
+
+### D-202 Coordinated RateController uses divided allocation only
+
+**Status:** Superseded in part by [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer): divided allocation is now the loose synchronizer, and per-item accuracy returns as the accurate synchronizer · **Source:** User decision (2026-10-10); removes the per-job "strict shared ceiling" mode
+
+**Decision.** When `RateController` is coordinated across instances, it uses
+**divided allocation** only. Each instance enforces its share of `N` locally (`N`
+divided by the live member count from the peer healthcheck) and re-reads
+membership periodically. No backend call is made per job. The per-job "strict
+shared ceiling" mode, in which every job claimed one of the `N` global slots from
+the backend before running, is dropped.
+
+**Consequences.** Within one process `N` stays a hard ceiling. Across instances
+each instance's share is hard, and the total in flight can briefly exceed `N`
+while membership changes propagate, until the next sample; that bounded overshoot
+is accepted in exchange for no backend round trip per job. `RateController` no
+longer requires the atomic-claim capability.
+
+### D-203 Coordinated GroupedRateController uses divided allocation only
+
+**Status:** Superseded in part by [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer): divided allocation is now the loose synchronizer, and the atomic grouped claim returns with the accurate synchronizer · **Source:** User decision (2026-10-10); follows [D-202](#d-202-coordinated-ratecontroller-uses-divided-allocation-only)
+
+**Decision.** When `GroupedRateController` is coordinated across instances, it
+uses **divided allocation**, like `RateController`. Each instance enforces its
+share of every group limit and of the optional global ceiling locally (each limit
+divided by the live member count), with no backend call per job. The per-job
+atomic claim spanning a group limit and the global limit is dropped.
+
+**Consequences.** Totals across instances can briefly exceed a group or global
+limit while membership changes propagate; that bounded overshoot is accepted.
+`GroupedRateController` no longer requires the atomic-claim capability, so the
+grouped example in [D-150](#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration) no longer applies. Global first-come,
+first-served selection applies within each instance.
+
+### D-204 Every backend has an accurate and a loose synchronizer
+
+**Status:** Accepted, with open items · **Source:** User decision (2026-10-10); supersedes the "divided allocation only" part of [D-202](#d-202-coordinated-ratecontroller-uses-divided-allocation-only) and [D-203](#d-203-coordinated-groupedratecontroller-uses-divided-allocation-only)
+
+**Decision.** Synchronization is library-wide split into named implementations of
+`SynchronizationProvider`, and the user chooses behavior by choosing the class:
+
+- **`InMemorySynchronization`** — in-process, no dependencies. Not the default:
+  by default there is no synchronizer at all ([D-207](#d-207-no-synchronization-by-default)).
+- **`XSynchronization`** (accurate) for each backend `X` — every incoming item asks
+  the backend for permission, so the limit is kept exactly across all instances.
+- **`LooseXSynchronization`** (loose) for each backend `X` — an
+  `InMemorySynchronization` that divides each limit by the live instance count it
+  samples from a healthcheck. It makes no backend call per item, for volumes the
+  backend could not serve item by item.
+
+The abstraction gains an **admission check for every incoming item**: before an
+item starts, the utility asks its synchronizer whether it can enter. In-memory and
+loose synchronizers answer locally; accurate ones answer through the backend in
+one atomic operation. Accurate mode counts every item by adding and removing a
+claim ID, not by `INCR`/`DECR`
+([D-082](#d-082-distributed-counting-is-set-based-never-increment-or-decrement)).
+
+**Consequences.** `RateController`, `GroupedRateController` and
+`ThroughputController` all work with either kind. Accuracy costs one backend
+round trip per item plus a release; loose mode costs a bounded overshoot while
+membership changes propagate. During an outage an accurate synchronizer falls
+back to the loose local share
+([D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application)). The capability check
+([D-150](#d-150-providers-declare-capabilities-and-insufficient-providers-fail-configuration)) applies to accurate synchronizers.
+
+**Open.** ~~What an accurate synchronizer does when the per-item backend call is
+slow but the backend is not down.~~ **Resolved** by [D-208](#d-208-backend-calls-time-out-after-500-ms-and-a-timeout-means-the-backend-is-down).
+
+### D-205 The healthcheck is a separate, shareable abstraction
+
+**Status:** Accepted, with open items · **Source:** User decision (2026-10-10); restructures [D-200](#d-200-every-provider-runs-a-distributed-peer-healthcheck)
+
+**Decision.** The peer healthcheck (membership, heartbeats, peer cleanup) is its
+own abstraction, separate from synchronizers. Several synchronizer
+implementations share one healthcheck implementation — `RedisSynchronization`
+and `LooseRedisSynchronization` both use `RedisHealthcheck` — and there is **one healthcheck per process**: it tracks membership per process
+(the service instance), not per scope, and every synchronizer in that process
+uses it, so the process heartbeats once.
+
+**Open.** ~~Whether a shared healthcheck instance tracks membership per scope or
+per process.~~ **Resolved:** per process (user decision, 2026-10-10).
+
+### D-206 Redis ships RedisSynchronization and LooseRedisSynchronization
+
+**Status:** Accepted, with open items · **Source:** User decision (2026-10-10); implements [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) and [D-205](#d-205-the-healthcheck-is-a-separate-shareable-abstraction) for Redis
+
+**Decision.** Redis provides three classes. `RedisHealthcheck` keeps membership and
+heartbeats in one sorted set
+([D-201](#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set)).
+`RedisSynchronization` (accurate) admits each item through an atomic script: for
+concurrency it checks the claim count against the limit and adds the item's claim
+ID tagged with its instance; for groups it checks the group limit and the global
+ceiling together; for rates it reserves against Redis server time. Releases remove
+the claim ID. `LooseRedisSynchronization` (loose) answers every admission check in
+memory against `limit ÷ live instances` from `RedisHealthcheck`.
+
+**Consequences.** Peer cleanup also removes a dead instance's claims. The grouped
+claim touches several keys and needs a deliberate hash-tag design.
+
+**Out of scope for now.** The key layout and hash tags for the accurate grouped
+claim, and for removing a dead instance's claims, are designed at implementation
+(user decision, 2026-10-10).
+
+### D-207 No synchronization by default
+
+**Status:** Accepted · **Source:** User decision (2026-10-10); refines [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)
+
+**Decision.** By default a utility's synchronization provider is `null` / `None` /
+`nil`. The utility enforces its limits inside the process and makes no
+synchronization calls and no admission checks through a synchronizer. Users who
+use controllers the simple way never see or configure one. `InMemorySynchronization`
+is not the default; it remains the in-process base that loose synchronizers build
+on.
+
+### D-208 Backend calls time out after 500 ms, and a timeout means the backend is down
+
+**Status:** Accepted · **Source:** User decision (2026-10-10); resolves the open item of [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)
+
+**Decision.** Every backend call made by a synchronizer or healthcheck has a
+timeout, **500 ms by default** and configurable by the user. A call that does not
+answer in time is treated as a dead backend: the synchronizer stops using the
+backend and continues on its finite local share, exactly as in an outage
+([D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application)). It returns to normal operation only after the healthcheck
+reaches the backend again and recovery reconciles state.
+
+**Consequences.** A slow backend never slows admission by more than the timeout.
+An item whose claim call timed out has an uncertain claim; it proceeds under the
+local share, and its claim ID is reconciled idempotently after recovery.
 
 ### D-165 ThroughputController spends time credits atomically at launch
 
@@ -1790,11 +2008,12 @@ data loss. Neither is available in any utility, in any configuration.
 
 ### S-008 Failing closed during a Redis outage
 
-**Status:** Rejected for Redis divided-allocation mode by [D-083](#d-083-a-redis-outage-fails-open-to-local-continuation); scope clarified by [D-164](#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)
+**Status:** Rejected for every provider and coordinated utility by [D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application); originally rejected for Redis by [D-083](#d-083-a-redis-outage-fails-open-to-local-continuation)
 
 Stop admitting work during a Redis outage to preserve the global ceiling exactly.
 Rejected: Redis must never be a dependency whose outage disables the application.
-Bounded overshoot is the accepted price.
+Bounded overshoot is the accepted price. D-199 extends this to every
+synchronization provider and every coordinated utility.
 
 ### S-009 Minimum job spacing is not a goal
 
@@ -1853,12 +2072,14 @@ answer. **A blocked test case must never be implemented by guessing**
 | Naming | `GroupedRateController` versus the earlier `GrouppedRateController` spelling | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Consolidation |
 | Shutdown | Disposition of callers already awaiting insertion when shutdown begins | [queue-and-admission.md](./subsystems/queue-and-admission.md#open-items) | Q&A Q3 |
 | Shutdown | Whether disposal is idempotent | [architecture.md](./architecture.md#open-items) | Consolidation |
-| Redis | The non-frozen membership policy and which policy is the default | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Q&A Q1 |
-| Redis | Whether the membership set and last-seen key co-locate under one hash tag | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | `CLAUDE.md` |
-| Redis | Division of `N` across processes, including integer remainders | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
-| Redis | The exact adapter interface for multi-key and scripted operations | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
-| Redis | Default key prefix, heartbeat interval, and staleness threshold | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
-| ~~Redis~~ | ~~Whether coordination is per-utility or process-wide~~ **Resolved: explicitly enabled per compatible utility by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract), never process-wide or implicit** | [redis-coordination.md](./subsystems/RedisSynchronizationProvider.md#open-items) | Consolidation |
+| Redis | The non-frozen membership policy and which policy is the default | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | Q&A Q1 |
+| ~~Redis~~ | ~~Whether the membership set and last-seen key co-locate under one hash tag~~ **Resolved: one sorted set by [D-201](#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set)** | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | `CLAUDE.md` |
+| Redis | Whether Redis Streams are used, and for what | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | [D-201](#d-201-redis-membership-and-heartbeats-live-in-one-sorted-set) |
+| ~~Redis~~ | ~~How an evicted peer's claims and leases in other keys are removed, and how those keys are slotted~~ **Out of scope until implementation** | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | [D-206](#d-206-redis-ships-redissynchronization-and-looseredissynchronization) |
+| Redis | Division of `N` across processes, including integer remainders | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | Consolidation |
+| Redis | The exact adapter interface for multi-key and scripted operations | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | Consolidation |
+| Redis | Default key prefix, heartbeat interval, and staleness threshold | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | Consolidation |
+| ~~Redis~~ | ~~Whether coordination is per-utility or process-wide~~ **Resolved: explicitly enabled per compatible utility by [D-163](#d-163-synchronizationprovider-is-the-backend-neutral-public-contract), never process-wide or implicit** | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | Consolidation |
 | Observability | Event payload shapes, delivery synchronicity, ordering guarantees | [observability.md](./subsystems/observability.md#open-items) | Consolidation |
 | Observability | OTel metric and span naming conventions | [observability.md](./subsystems/observability.md#open-items) | Consolidation |
 | Project | Which binding lands first, and per-language test tooling | [testing.md](./testing.md#open-items) | Consolidation |
@@ -1878,4 +2099,8 @@ answer. **A blocked test case must never be implemented by guessing**
 | Adaptive | The congestion preset's algorithm and latency-signal source | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
 | Adaptive | Whether the 80/20 safety-pressure guidance is a default or only documentation | [adaptive-capacity-policy.md](./utilities/adaptive-capacity-policy.md#open-items) | Round 4 |
 | Grouped | Reserved-share allocation, pending the normalization algorithm | [grouped-rate-controller.md](./utilities/grouped-rate-controller.md#open-items) | Round 4 |
+| ~~Synchronization outage~~ | ~~Whether the user-supplied default limit for an instance that starts during an outage is required, and what applies without one~~ **Resolved: optional on the provider; falls back to the utility's normal configured limit** | [synchronization-provider.md](./utilities/synchronization-provider.md#failure-and-degraded-mode) | [D-199](#d-199-losing-the-synchronization-backend-never-stops-the-application) |
+| ~~Synchronization~~ | ~~What an accurate synchronizer does when the per-item backend call is slow but the backend is not down~~ **Resolved: 500 ms timeout, then treated as down ([D-208](#d-208-backend-calls-time-out-after-500-ms-and-a-timeout-means-the-backend-is-down))** | [synchronization-provider.md](./utilities/synchronization-provider.md#backend-call-timeout) | [D-204](#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer) |
+| ~~Synchronization~~ | ~~Whether a shared healthcheck instance tracks membership per scope or per process~~ **Resolved: per process** | [synchronization-provider.md](./utilities/synchronization-provider.md#peer-healthcheck) | [D-205](#d-205-the-healthcheck-is-a-separate-shareable-abstraction) |
+| ~~Redis~~ | ~~Key layout and hash tags for the accurate grouped claim~~ **Out of scope until implementation** | [redis-synchronization.md](./subsystems/redis-synchronization.md#open-items) | [D-206](#d-206-redis-ships-redissynchronization-and-looseredissynchronization) |
 | Provider | Whether capabilities are booleans or declared at a level | [synchronization-provider.md](./utilities/synchronization-provider.md#open-design-questions) | Round 4 |

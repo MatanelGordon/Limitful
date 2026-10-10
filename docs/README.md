@@ -43,7 +43,7 @@ reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 | --- | --- | --- |
 | Queue and admission | [subsystems/queue-and-admission.md](./subsystems/queue-and-admission.md) | The bounded-queue primitive shared by every utility: overflow policy, timeout stages, cancellation |
 | Shared controller contract | [subsystems/controller-contract.md](./subsystems/controller-contract.md) | **Draft.** The surface shared by every controller: submission, `JobOptions`, advisory admission queries, deadline-aware admission |
-| RedisSynchronizationProvider | [subsystems/RedisSynchronizationProvider.md](./subsystems/RedisSynchronizationProvider.md) | Concrete Redis provider under `SynchronizationProvider`: sets/claims, scripts, liveness, degraded divided-allocation behavior, keys, and cluster slotting |
+| Redis synchronization | [subsystems/redis-synchronization.md](./subsystems/redis-synchronization.md) | `RedisHealthcheck`, accurate `RedisSynchronization` and loose `LooseRedisSynchronization`: sets/claims, scripts, liveness, outage behavior, keys, and cluster slotting |
 | Observability | [subsystems/observability.md](./subsystems/observability.md) | Raw event surface, metrics snapshots, and the optional OpenTelemetry package |
 
 ## Reading paths
@@ -110,9 +110,11 @@ The round-4 consolidation debts are closed:
    decision text, and explanations of the rename.
 2. **Coordination layering:** the backend-neutral public contract is
    [`SynchronizationProvider`](./utilities/synchronization-provider.md);
-   [`RedisSynchronizationProvider`](./subsystems/RedisSynchronizationProvider.md) is one
-   concrete provider beneath it
-   ([D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
+   [`RedisSynchronization` and `LooseRedisSynchronization`](./subsystems/redis-synchronization.md) are the
+   concrete accurate and loose Redis implementations beneath it
+   ([D-204](./decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer),
+   [D-206](./decisions.md#d-206-redis-ships-redissynchronization-and-looseredissynchronization);
+   [D-163](./decisions.md#d-163-synchronizationprovider-is-the-backend-neutral-public-contract),
    [D-164](./decisions.md#d-164-redis-coordination-is-a-concrete-provider-under-the-neutral-contract)).
 3. **Decision and matrix coverage:** `ThroughputController`,
    `AdaptiveCapacityPolicy`, `SynchronizationProvider`, and `Probe` now have

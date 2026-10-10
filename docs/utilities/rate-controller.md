@@ -79,7 +79,11 @@ Three consequences are specific to this controller:
 by the `ParallelWorkers` sampling function only decides how that fixed budget is
 divided; it can never enlarge it, and any requested count is clamped to `N`
 ([D-002](../decisions.md#d-002-n-is-the-hard-global-in-flight-ceiling),
-[INV-4](../architecture.md#invariants)).
+[INV-4](../architecture.md#invariants)). Across coordinated instances, an accurate synchronizer keeps `N` exact with a
+backend call per item; a loose synchronizer has each instance enforce its own
+share of `N` with no per-item call, so the total can briefly exceed `N` while
+membership changes propagate
+([D-204](../decisions.md#d-204-every-backend-has-an-accurate-and-a-loose-synchronizer)).
 
 ```mermaid
 flowchart LR
@@ -93,11 +97,12 @@ flowchart LR
   HOLD --> ACQ
 
   COORD["Distributed mode divides N across processes"] -.-> DIVIDE
-  OUT["Synchronization outage - configured degraded policy applies"] -.->|"only documented exception"| ACQ
+  OUT["Synchronization outage - continue on the finite local share"] -.->|"only documented exception"| ACQ
 ```
 
-The only exception to the hard ceiling is the explicitly configured degraded
-policy during a synchronization-provider outage. Any temporary overshoot must be
+The only exception to the hard ceiling is a synchronization-provider outage,
+during which each instance continues on its finite local share
+([D-199](../decisions.md#d-199-losing-the-synchronization-backend-never-stops-the-application)). Any temporary overshoot must be
 bounded, visible, and never described as a hard global guarantee; see
 [SynchronizationProvider](./synchronization-provider.md#failure-and-degraded-mode).
 
