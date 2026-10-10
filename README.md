@@ -3,10 +3,10 @@
 Load leveling for every stack: a fast, Bottleneck-style job queue and rate
 limiter for C#, TypeScript, Rust, Go, and Python.
 
-> **Project status: design stage.** This repository currently contains the design
-> specification only — there is no source code and no test suite yet. The
-> documentation describes intended behavior and the portability contract that
-> implementations must satisfy.
+> **Project status: development scaffolds.** The five target-language workspaces
+> are ready for development, but no Limitful behavior has been implemented yet.
+> The documentation remains the portability contract that each implementation
+> must satisfy.
 
 ## Components
 
@@ -22,6 +22,38 @@ limiter for C#, TypeScript, Rust, Go, and Python.
 
 Optional extras: cross-process coordination through a user-supplied Redis
 adapter, and a separate opt-in OpenTelemetry package per language.
+
+## Repository layout
+
+Each language root is an expandable workspace. The primary package lives in
+`main` except in C#, where the solution contains the `Limitful.Core` project.
+Future packages such as OpenTelemetry or Redis synchronization belong beside the
+primary package, not inside it.
+
+| Language | Primary package | Workspace model | Test runner |
+| --- | --- | --- | --- |
+| C# | `csharp/src/Limitful.Core` | One solution, multiple projects | xUnit v3 |
+| TypeScript | `typescript/main` | npm workspaces + Turborepo | Vitest |
+| Rust | `rust/main` | Cargo workspace | Rust test harness |
+| Go | `go/main` | Go module with sibling packages | `go test` |
+| Python | `python/main` | uv workspace | pytest |
+
+The scaffolds are intentionally non-publishable and contain no library
+implementation. The small Python import test validates packaging only.
+
+## Development
+
+Run `make help` for the full command list. The common entry points are:
+
+```sh
+make doctor       # verify required toolchains
+make setup        # restore/install every workspace
+make check        # formatting, linting, builds, and tests
+make test         # all five test runners
+```
+
+Every aggregate target also has a language-specific form, such as
+`make test-csharp`, `make test-typescript`, or `make test-rust`.
 
 ## Documentation
 

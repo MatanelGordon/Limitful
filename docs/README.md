@@ -4,12 +4,12 @@ Limitful is a load-leveling toolkit: a bounded job queue, a concurrency-based ra
 controller, parallel workers, batching accumulators, and a retry decorator —
 reimplemented natively in C#, TypeScript, Rust, Go, and Python.
 
-> **Project status: design stage.** This repository currently contains the design
-> specification only. No language binding has been implemented yet, and no test
-> suite exists. Every document below describes *intended* behavior and the
-> portability contract that implementations must satisfy. Do not scaffold empty
-> language projects to make the structure look complete — see
-> [testing.md § Implementation status](./testing.md#implementation-status).
+> **Project status: development scaffolds.** Boilerplate workspaces now exist for
+> all five target languages, but no language binding implements Limitful behavior
+> yet. Every document below still describes *intended* behavior and the
+> portability contract implementations must satisfy. See
+> [testing.md § Implementation status](./testing.md#implementation-status) for
+> the distinction between a runnable scaffold and an implemented binding.
 
 ## Documentation map
 
@@ -77,7 +77,7 @@ a specification change, not an edit.
 3. **Update the test matrix** in [testing.md](./testing.md): add, change, or
    retire case IDs. A behavioral contract without a case ID is not finished.
 4. **Update every implemented binding** affected by the changed case IDs. Today
-   that set is empty; it stops being empty the moment the first binding lands.
+   that set is empty; scaffolding alone does not make a binding implemented.
 5. **Keep `CLAUDE.md` thin.** It points at these documents and states working
    conventions. New design detail belongs here, not there.
 

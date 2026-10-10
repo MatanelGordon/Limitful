@@ -8,8 +8,10 @@ TypeScript, Rust, Go, and Python.
 work; those documents are what to build. When they disagree, the documents win —
 and the disagreement is a bug in this file.
 
-> **Status: design stage.** No language binding exists yet. There is no source
-> code and no test suite to run. Do **not** scaffold empty language projects.
+> **Status: development scaffolds.** C#, TypeScript, Rust, Go, and Python
+> workspaces exist and their toolchains run, but no Limitful behavior has been
+> implemented. A scaffold is not an implemented binding and does not satisfy any
+> business-test matrix row.
 
 ## Where things are
 
@@ -208,9 +210,10 @@ one is never a local decision.
 - **Cover** defaults, every advanced override path, cancellation at each stage,
   all timeout stages, queue behavior, retries, grouped and global limits together,
   lifecycle/shutdown, and composition.
-- **Do not invent bindings that do not exist.** Document intended portability;
-  never create empty projects. When only one implementation exists, that is the
-  only one to update.
+- **Do not mistake scaffolding for an implemented binding.** Only add behavioral
+  tests alongside real behavior, and only mark matrix coverage for bindings that
+  implement that behavior. When only one implementation exists, that is the only
+  one to update.
 - **A `Blocked` matrix row is never implemented by guessing.** Decide it in
   [docs/decisions.md](./docs/decisions.md) first.
 

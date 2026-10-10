@@ -19,23 +19,25 @@ changed case IDs must be updated in the same change.
 
 ## Implementation status
 
-**No language binding exists yet.** This repository currently contains design
-documentation only — there is no source code and no test suite to run.
+Development scaffolds exist for C#, TypeScript, Rust, Go, and Python. Their
+package managers, builds, linters, formatters, and test runners are wired, but no
+Limitful behavior has been implemented. Consequently, none of these scaffolds is
+an implemented binding and the business-test matrix still has no language
+coverage columns.
 
 Consequences, and they are deliberate:
 
-- **Do not scaffold empty language projects** to make the structure look
-  complete. An empty `csharp/`, `typescript/`, `rust/`, `go/`, or `python/`
-  directory is worse than nothing: it implies coverage that does not exist.
+- **Do not add fake behavior or placeholder business tests** to make a scaffold
+  look implemented. Tooling checks and packaging smoke tests prove only that the
+  development environment works.
 - The [test matrix](#test-matrix) below is the **portability contract**. It is
   written now so that the first binding has a definition of done, and so later
   bindings have a parity checklist rather than a reading exercise.
-- The planned targets are C#, TypeScript, Rust, Go, and Python
+- The targets are C#, TypeScript, Rust, Go, and Python
   ([D-101](./decisions.md#d-101-api-surfaces-are-idiomatic-per-language)). Nothing
-  here commits to an order, and a target is not real until its binding lands.
-- When the first binding lands, its test commands go in
-  [per-binding commands](#per-binding-commands), and its rows in the matrix move
-  from `—` to pass/fail.
+  here commits to an implementation order.
+- When a binding implements behavior, its matrix rows move from `—` to pass/fail.
+  Merely running the scaffold test command does not change matrix status.
 
 **Full TDD is expected for every binding**: write the failing test for the case ID
 first, implement, then refactor.
@@ -746,18 +748,25 @@ All timing and timeout cases use a virtual monotonic clock and manual scheduler.
 
 ## Per-binding commands
 
-No binding exists yet, so there is nothing to run. This table is filled in as
-bindings land — one row per real binding, never a placeholder for a planned one.
+These commands validate the development scaffolds. They do not claim behavioral
+coverage, integration coverage, or the 80% target described above.
 
-| Binding | Unit | Integration | Coverage | Status |
-| --- | --- | --- | --- | --- |
-| — | — | — | — | No implementation exists yet |
+| Binding | Runner | Command | Status |
+| --- | --- | --- | --- |
+| C# | xUnit v3 | `make test-csharp` | Scaffold only; no behavior tests |
+| TypeScript | Vitest | `make test-typescript` | Scaffold only; no behavior tests |
+| Rust | Built-in Rust test harness | `make test-rust` | Scaffold only; no behavior tests |
+| Go | Built-in `go test` harness | `make test-go` | Scaffold only; no behavior tests |
+| Python | pytest | `make test-python` | Packaging/import smoke test only |
+
+Run all five with `make test`, or the full formatting, linting, build, and test
+matrix with `make check`.
 
 ## Open items
 
 | Item | Status |
 | --- | --- |
 | Which binding lands first, and therefore which becomes the reference implementation | Not decided |
-| The per-language test framework and coverage tool choices | Not decided |
+| Coverage tool choices for implemented bindings | Not decided; select them when behavioral implementation begins |
 | Whether the matrix is additionally machine-readable, so parity can be checked in CI rather than by grep | Not decided. Surfaced during consolidation |
 | Whether stress and soak suites run in CI or on demand | Not decided. Surfaced during consolidation |
