@@ -21,6 +21,8 @@ Thumbs.db
 # Repository-level tool caches
 .turbo/
 .turbo-cache/
+__pycache__/
+*.py[cod]
 
 # Local package/release output
 .release-artifacts/
