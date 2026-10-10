@@ -38,8 +38,9 @@ primary package, not inside it.
 | Go | `go/main` | Go module with sibling packages | `go test` |
 | Python | `python/main` | uv workspace | pytest |
 
-The scaffolds are intentionally non-publishable and contain no library
-implementation. The small Python import test validates packaging only.
+The scaffolds contain no library implementation and are marked private or
+non-publishable where their ecosystem provides such metadata. The small Python
+import test validates packaging only.
 
 ## Development
 

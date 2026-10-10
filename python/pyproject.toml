@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["main", "*/"]
+members = ["*"]
 exclude = ["dist", ".venv"]
 
 [tool.ruff]

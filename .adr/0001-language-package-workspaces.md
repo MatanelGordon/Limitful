@@ -18,4 +18,7 @@ keeping optional dependencies out of the main package.
 - Optional packages are siblings of `main`; they are not nested inside the main
   package.
 - C# projects share `csharp/Limitful.sln` and use `Limitful.*` package names.
+- Initial test tooling is xUnit v3 for C#, Vitest for TypeScript, the built-in
+  Rust and Go harnesses, and pytest for Python. Scaffold-only packages do not add
+  fake behavioral tests.
 - No documentation-site project is created until its framework is decided.

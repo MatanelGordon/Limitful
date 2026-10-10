@@ -753,11 +753,11 @@ coverage, integration coverage, or the 80% target described above.
 
 | Binding | Runner | Command | Status |
 | --- | --- | --- | --- |
-| C# | xUnit v3 | `make test-csharp` | Scaffold only; no behavior tests |
-| TypeScript | Vitest | `make test-typescript` | Scaffold only; no behavior tests |
+| C# | xUnit v3 (`xunit.v3` 4.0.2) | `make test-csharp` | Scaffold only; no behavior tests |
+| TypeScript | Vitest 5.0.3 | `make test-typescript` | Scaffold only; no behavior tests |
 | Rust | Built-in Rust test harness | `make test-rust` | Scaffold only; no behavior tests |
 | Go | Built-in `go test` harness | `make test-go` | Scaffold only; no behavior tests |
-| Python | pytest | `make test-python` | Packaging/import smoke test only |
+| Python | pytest 9.1.1 | `make test-python` | Packaging/import smoke test only |
 
 Run all five with `make test`, or the full formatting, linting, build, and test
 matrix with `make check`.
