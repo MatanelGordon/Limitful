@@ -9,12 +9,8 @@
       "dependsOn": ["build"],
       "inputs": ["src/**"]
     },
-    "lint": {
-      "dependsOn": ["build"]
-    },
-    "typecheck": {
-      "dependsOn": ["build"]
-    },
+    "lint": {},
+    "typecheck": {},
     "format:check": {},
     "format": {},
     "clean": {

@@ -17,15 +17,29 @@ expansion in all languages. In C#, it can be different projects but the same
 solution. in node, it can be a nested turborepo, in go you can use go packages
 as always, and in rust you do whatever you want.
 
+## STATUS
+
+DONE — follow-up implementation and all required checks are complete.
+
 # DONE
 
 - Scaffolded `typescript/` as a private npm workspace root with Turborepo v2.11.7.
 - Created `typescript/main` as the private `limitful` package (v0.0.0).
 - Build emits ESM `.js` + `.d.ts` from `src/index.ts` to `dist/`.
 - Scripts: build, test, lint, typecheck, format:check, format, clean, ci.
-- Vitest configured with `passWithNoTests: true`; no fake assertions.
-- TypeScript strict mode; Prettier configured; ESLint flat config active.
-- All critical-path tests pass: install, build, test, lint, format:check, ci.
+- npm workspaces use `*` to discover sibling packages; root Turborepo scripts run
+  tasks across all discovered packages without package filters.
+- Exact tool versions: TypeScript 7.0.2, Vitest 5.0.3, Prettier 3.9.10, and
+  Turbo 2.11.7.
+- Lint runs strict `tsc --noEmit`; ESLint and typescript-eslint were removed,
+  and `@types/node` is not a direct dependency (npm installs it as an optional
+  Vitest/Vite peer).
+- Shared Prettier configuration lives at the `typescript/` workspace root; the
+  workspace has a comprehensive nested `.gitignore`.
+- Vitest is configured with `passWithNoTests: true`; no fake tests or behavior
+  were added.
+- `npm --prefix typescript install`, `build`, `test`, `lint`, `format:check`,
+  `ci`, and `npm --prefix typescript ci` all pass; the lockfile was regenerated.
 
 # NEXT
 
@@ -38,7 +52,9 @@ None.
 
 # DECISIONS
 
-- Used TypeScript ^5.9.3 instead of ^7.0.2 because typescript-eslint v8 requires `<6.1.0`. Plan allows compatible patch releases.
-- Empty `__tests__/` directory prepared; tests pass with zero files via `passWithNoTests`.
+- Exact foundation-verified tool versions are pinned. The prior claim that
+  TypeScript 5.9.3 was a compatible patch for 7.0.2 was incorrect.
+- TypeScript strict mode provides linting through `tsc --noEmit`; a separate
+  `typecheck` alias remains available.
+- Limitful is described neutrally as load-leveling utilities.
 - `packageManager` field set on root for Turborepo workspace resolution.
-- ESLint uses flat config with strict + stylistic type-checked presets.
