@@ -25,17 +25,17 @@ adapter, and a separate opt-in OpenTelemetry package per language.
 
 ## Repository layout
 
-Each language root is an expandable workspace. The primary package lives in
-`main` except in C#, where the solution contains the `Limitful.Core` project.
-Future packages such as OpenTelemetry or Redis synchronization belong beside the
-primary package, not inside it.
+Each language root follows its ecosystem's package conventions. TypeScript,
+Rust, and Python keep the primary package in `main`, while C# uses direct sibling
+projects and Go places the primary package at its module root. Future packages
+remain separate from the primary package using each ecosystem's native layout.
 
 | Language | Primary package | Workspace model | Test runner |
 | --- | --- | --- | --- |
 | C# | `csharp/Limitful.Core` | Direct sibling projects in one solution | xUnit v3 |
 | TypeScript | `typescript/main` | npm workspaces + Turborepo | Vitest |
 | Rust | `rust/main` | Cargo workspace | Rust test harness |
-| Go | `go/main` | Go module with sibling packages | `go test` |
+| Go | `go/` | Module-root package with normal subpackages | `go test` |
 | Python | `python/main` | uv workspace | pytest |
 
 The scaffolds contain no library implementation and are marked private or

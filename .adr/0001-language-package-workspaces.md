@@ -1,6 +1,6 @@
 # Organize language bindings as expandable package workspaces
 
-**Status:** accepted
+**Status:** superseded by ADR-0003
 
 Each target language owns a top-level workspace that can grow beyond the core
 binding. C# keeps `Limitful.Core` and future projects such as
