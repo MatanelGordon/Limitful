@@ -32,7 +32,7 @@ remain separate from the primary package using each ecosystem's native layout.
 
 | Language | Primary package | Workspace model | Test runner |
 | --- | --- | --- | --- |
-| C# | `csharp/Limitful.Core` | Direct sibling projects in one solution | xUnit v3 |
+| C# | `csharp/Limitful.Core` | Direct projects; `net8.0` + `netstandard2.0` | xUnit v3 |
 | TypeScript | `typescript/main` | npm workspaces + Turborepo | Vitest |
 | Rust | `rust/main` | Cargo workspace | Rust test harness |
 | Go | `go/` | Module-root package with normal subpackages | `go test` |
