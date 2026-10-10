@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "main",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Limitful — distributed rate-limiting primitives (Rust)"
+repository = "https://github.com/MatanelGordon/Limitful"
+keywords = ["rate-limiting", "distributed", "synchronization"]
+categories = ["algorithms"]
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = 1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+unused_must_use = "warn"
+missing_docs = "allow"
