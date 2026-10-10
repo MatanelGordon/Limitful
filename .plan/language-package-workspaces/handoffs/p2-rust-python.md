@@ -18,22 +18,17 @@ as always, and in rust you do whatever you want.
 
 # DONE
 
-- `rust/Cargo.toml` — workspace resolver v2, clippy lints configured, publish=false
-- `rust/main/Cargo.toml` — limitful crate v0.0.0, edition 2021
-- `rust/main/src/lib.rs` — doc-only lib with behavior-free test (`assert_eq!(2+2,4)`)
-- `rust/Cargo.lock` — committed workspace lockfile
-- `python/pyproject.toml` — uv workspace, members=["main"], ruff + pytest config
-- `python/main/pyproject.toml` — limitful distribution v0.0.0, hatchling backend, Python>=3.11
-- `python/main/src/limitful/__init__.py` — src-layout package with docstring
-- `python/main/tests/` — scaffold tests (version check + import sanity)
-- `python/uv.lock` — committed lockfile
-- All critical-path tests pass (fmt, clippy, cargo test, uv sync/build/ruff/pytest)
-- Commit 99ba97a on branch sa/p2-rust-python
+- Commit: this handoff and the Rust/Python follow-up are committed together on `sa/p2-rust-python`.
+- Cargo and uv member globs discover a temporary sibling package; current workspaces contain only `limitful`.
+- Rust uses Cargo's empty native test harness; the placeholder test and disabled doctests are removed.
+- Python is a virtual uv workspace; `limitful` uses `uv_build`, pytest 9.1.1, and Ruff 0.15.9.
+- Only one package-import smoke test remains under `python/main/tests`; built sdist and wheel contain no package tests.
+- `python/uv.lock` is regenerated; Rust/Python descriptions no longer claim unsupported coordination behavior.
+- All required fmt, clippy, cargo test, uv sync/build, Ruff check/format, and pytest commands pass.
 
 # NEXT
 
-- Root Makefile with per-language targets (owned by root agent in phase 3)
-- Other language workspaces: csharp/, typescript/, go/
+- Root Makefile and other language workspaces remain with their assigned owners.
 
 # BLOCKED
 
@@ -41,8 +36,8 @@ None.
 
 # DECISIONS
 
-1. Rust uses Cargo workspace with single member `main`; no benchmarks yet since the crate has no code. Benchmarks will be added when algorithms are implemented.
-2. Rust lints: clippy all+pedantic at warn, correctness/suspicious at deny; rust_2018_idioms warn; doctests disabled until API exists.
-3. Python uses `src/limitful` layout with tests colocated at `python/main/tests/` (flat, matching the critical-path `pytest main/tests` command).
-4. Python dev deps: pytest managed via uv dependency-groups (dev); Ruff configured at both workspace and package level.
-5. Both packages versioned at 0.0.0 with explicit non-publish intent while empty.
+1. Cargo and uv use sibling-directory globs while excluding workspace output directories (`target`, `dist`, and `.venv`).
+2. The uv root contains workspace and shared-tool configuration only; package metadata and `uv_build` live in `python/main`.
+3. pytest and Ruff are pinned in the member's `dev` group to the requested versions.
+4. The only test is a package-import smoke test; no Limitful behavior is implemented or tested.
+5. Rust documentation states only that the package is a scaffold with no implementation or public API.

@@ -9,9 +9,6 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[lib]
-doctest = false  # No public docs until we have an API to document
-
 [features]
 default = []
 

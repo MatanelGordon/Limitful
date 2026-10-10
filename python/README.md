@@ -1,7 +1,9 @@
 # Limitful — Python (monorepo)
 
-Workspace containing all Python distributions for Limitful.
+Virtual uv workspace for the Python packages in Limitful.
 
-- **`main`**: Core `limitful` distribution.
+- **`main`**: Primary `limitful` distribution; future packages can be added as
+  siblings.
 
-**Scaffold only.** No algorithms or network code are implemented yet.
+The workspace root holds shared tooling configuration; package metadata lives
+in each member.

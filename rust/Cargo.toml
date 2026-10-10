@@ -2,16 +2,18 @@
 resolver = "2"
 members = [
     "main",
+    "*/",
 ]
+exclude = ["target"]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "Limitful — distributed rate-limiting primitives (Rust)"
+description = "Rust package scaffold for Limitful"
 repository = "https://github.com/MatanelGordon/Limitful"
-keywords = ["rate-limiting", "distributed", "synchronization"]
+keywords = ["rate-limiting"]
 categories = ["algorithms"]
 
 [workspace.lints.clippy]

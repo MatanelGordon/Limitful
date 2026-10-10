@@ -1,14 +1,9 @@
-"""Smoke tests for the limitful scaffold."""
+"""Packaging smoke test for the limitful package."""
+
+from importlib import import_module
 
 
-def test_version():
-    """Verify the package declares version 0.0.0."""
-    import limitful
-
-    assert limitful.__version__ == "0.0.0"
-
-
-def test_import_no_side_effects():
-    """Importing should not raise any exceptions."""
-    # Already imported above; silence unused-import warning.
-    assert True
+def test_package_can_be_imported():
+    """Verify the workspace package is importable."""
+    package = import_module("limitful")
+    assert package.__name__ == "limitful"

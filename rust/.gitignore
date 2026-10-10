@@ -1,4 +1,13 @@
+# Rust build output
 /target/
+
+# Rust compiler backup files
+**/*.rs.bk
+
+# Debug symbols and profiling output
 *.pdb
 *.dll
 *.exe
+*.dSYM/
+*.profraw
+*.profdata

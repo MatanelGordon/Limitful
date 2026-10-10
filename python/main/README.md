@@ -1,5 +1,5 @@
 # limitful
 
-Distributed rate-limiting primitives — Python implementation.
+Python package scaffold for Limitful.
 
-**Scaffold only.** No algorithms or network code are implemented yet.
+This package currently contains no Limitful implementation or public API.
