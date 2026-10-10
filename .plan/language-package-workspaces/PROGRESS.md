@@ -1,13 +1,13 @@
 # Progress: language package workspaces
 
 **Status:** executing
-**Current phase:** Phase 2 — preparing concurrent ori dispatch
+**Current phase:** Phase 2 — ori authors running
 
 ## Agents
 
-- `p2-dotnet-go` — pending
-- `p2-typescript` — pending
-- `p2-rust-python` — pending
+- `p2-dotnet-go` — running in `sa/p2-dotnet-go`; owns `csharp/**`, `go/**`
+- `p2-typescript` — running in `sa/p2-typescript`; owns `typescript/**`
+- `p2-rust-python` — running in `sa/p2-rust-python`; owns `rust/**`, `python/**`
 
 ## Completed
 
@@ -24,5 +24,5 @@
 
 ## Resume here
 
-Commit the foundation, create the three worktrees, and dispatch the Phase 2 ori
-authors concurrently.
+Collect the three ori reports, inspect their status files and commits, then run a
+different-model review against each worktree before merge.
