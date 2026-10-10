@@ -1,0 +1,43 @@
+# Build and publish outputs
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+publish/
+
+# Test and coverage outputs
+[Tt]est[Rr]esult*/
+coverage/
+coverage.*
+coverage-*.json
+coverage-*.xml
+*.coverage
+*.coveragexml
+*.coverprofile
+lcov.info
+
+# Generated NuGet packages
+*.nupkg
+*.snupkg
+
+# IDE state and local user settings
+.vs/
+.idea/
+_ReSharper*/
+*.sln.docstates
+*.suo
+*.user
+*.userosscache
+*.csproj.user
+*.DotSettings.user
+*.sln.iml
+
+# Editor and operating-system temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# BenchmarkDotNet generated reports
+BenchmarkDotNet.Artifacts/

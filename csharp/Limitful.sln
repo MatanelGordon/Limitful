@@ -6,6 +6,10 @@ Project("{FAE04EC0-327F-11DC-90FF-0800200C9A66}") = "Limitful.Core", "src\Limitf
 EndProject
 Project("{FAE04EC0-327F-11DC-90FF-0800200C9A66}") = "Limitful.Core.Tests", "tests\Limitful.Core.Tests\Limitful.Core.Tests.csproj", "{F465F432-547E-4ACE-B2CD-1C66AC71563F}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{FF10E6B6-C986-411C-A6C1-1302C2EAEC7E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{177D064D-DF41-4D82-8F3D-0901EB4802B2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,5 +24,9 @@ Global
 		{F465F432-547E-4ACE-B2CD-1C66AC71563F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F465F432-547E-4ACE-B2CD-1C66AC71563F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F465F432-547E-4ACE-B2CD-1C66AC71563F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{ADEC7B2D-0113-4863-8818-AE99508F7EAF} = {FF10E6B6-C986-411C-A6C1-1302C2EAEC7E}
+		{F465F432-547E-4ACE-B2CD-1C66AC71563F} = {177D064D-DF41-4D82-8F3D-0901EB4802B2}
 	EndGlobalSection
 EndGlobal

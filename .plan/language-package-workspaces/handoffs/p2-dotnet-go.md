@@ -20,22 +20,23 @@ as always, and in rust you do whatever you want.
 
 # DONE
 
-- `csharp/global.json` — pins SDK to 8.0.404 with latestFeature rollForward
-- `csharp/Limitful.sln` — solution with `src` and `tests` project entries; supports adding future `Limitful.*` projects beside `src/Limitful.Core`
-- `csharp/src/Limitful.Core/Limitful.Core.csproj` — NET 8.0 class library; IsPackable=false; no implementation types
-- `csharp/tests/Limitful.Core.Tests/Limitful.Core.Tests.csproj` — NET 8.0 test project referencing core; no tests written
-- `go/go.mod` — module `github.com/limitful/go`, Go 1.21
-- `go/main/doc.go` — package `limitful` with documentation-only placeholder
-- Agent status written to `.plan/language-package-workspaces/agents/p2-dotnet-go.md`
+- Added native generated-artifact, coverage, test-result, IDE, and temporary-file ignores under `csharp/` and `go/` without ignoring source, lock, or configuration files.
+- `csharp/Limitful.sln` organizes `Limitful.Core` and `Limitful.Core.Tests` under visible `src` and `tests` solution folders.
+- Added `csharp/Directory.Build.props` for shared .NET 8, nullable, implicit-using, and C# 12 settings, plus `csharp/Directory.Packages.props` for centrally managed test dependencies.
+- Kept `Limitful.Core` empty, non-packable, non-publishable, and at version `0.0.0`.
+- Configured `Limitful.Core.Tests` as a real xUnit v3 test project with `IsTestProject=true`, private test dependencies, and the verified stable NuGet versions: `xunit.v3` 4.0.2, `xunit.runner.visualstudio` 4.0.1, `Microsoft.NET.Test.Sdk` 18.10.1, and `coverlet.collector` 10.1.0. No fake test source was added.
+- Corrected the Go module path to `github.com/MatanelGordon/Limitful/go` and described the package neutrally as load-leveling utilities.
 
-Critical-path results:
+Critical-path results (all commands exited successfully):
 ```
-$ dotnet restore csharp/Limitful.sln            → OK (restored 2 projects)
-$ dotnet build   csharp/Limitful.sln --configuration Release --no-restore → OK (0 warnings, 0 errors)
-$ dotnet test    csharp/Limitful.sln --configuration Release --no-build   → OK (no-test harness, exit 0)
-$ cd go && go test ./...                         → OK (no test files)
-$ cd go && go vet ./...                          → OK
+$ dotnet restore csharp/Limitful.sln → OK (2 projects restored)
+$ dotnet build csharp/Limitful.sln --configuration Release --no-restore → OK (0 warnings, 0 errors)
+$ dotnet test csharp/Limitful.sln --configuration Release --no-build → OK (no test source, no tests discovered; fake tests intentionally omitted)
+$ cd go && go test ./... → OK (no test files)
+$ cd go && go vet ./... → OK
 ```
+
+`dotnet list package --include-transitive` confirmed all four requested direct package versions resolve exactly. The follow-up changes are included in the second green commit on this worktree branch.
 
 # NEXT
 
@@ -49,6 +50,7 @@ None.
 
 1. Pinned .NET SDK to 8.0.404 (installed version available in container) using `rollForward: latestFeature` to allow security patches.
 2. Test project uses `../../src/Limitful.Core/Limitful.Core.csproj` — two-level parent relative path from `tests/` back to `csharp/`.
-3. Go module path chosen as `github.com/limitful/go` following standard Go import-path conventions.
-4. No placeholder classes, fake tests, or stub implementations added — empty packages must truly be empty.
-5. Go `doc.go` used instead of an empty `.go` file to satisfy Go's requirement that source files belong to a package while remaining behavior-free.
+3. Central package version management keeps test dependency versions in one place; each test-only package reference uses `PrivateAssets=all`.
+4. The empty core remains at version `0.0.0` and is not packable or publishable until it contains a real implementation.
+5. Go module path follows the repository's actual GitHub location, `github.com/MatanelGordon/Limitful/go`.
+6. No placeholder classes or fake tests were added; Go uses the native `testing`/`go test` harness when real tests are introduced.

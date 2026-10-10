@@ -1,0 +1,27 @@
+# Go build and test outputs
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.profraw
+*.coverprofile
+coverage/
+coverage*.html
+
+# IDE state
+.idea/
+.fleet/
+*.iml
+
+# Editor and operating-system temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
