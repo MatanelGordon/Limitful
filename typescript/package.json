@@ -1,0 +1,22 @@
+{
+  "name": "limitful-workspace",
+  "private": true,
+  "description": "Limitful load-leveling utilities — TypeScript workspace",
+  "workspaces": [
+    "*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "format:check": "turbo run format:check",
+    "format": "turbo run format",
+    "clean": "turbo run clean",
+    "typecheck": "turbo run typecheck",
+    "ci": "turbo run ci"
+  },
+  "devDependencies": {
+    "turbo": "2.11.7"
+  },
+  "packageManager": "npm@11.4.2"
+}
