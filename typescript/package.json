@@ -1,0 +1,22 @@
+{
+  "name": "limitful-workspace",
+  "private": true,
+  "description": "Limitful distributed synchronization — TypeScript workspace",
+  "workspaces": [
+    "main"
+  ],
+  "scripts": {
+    "build": "turbo run build --filter=limitful",
+    "test": "turbo run test --filter=limitful",
+    "lint": "turbo run lint --filter=limitful",
+    "format:check": "turbo run format:check --filter=limitful",
+    "format": "turbo run format --filter=limitful",
+    "clean": "turbo run clean --filter=limitful",
+    "typecheck": "turbo run typecheck --filter=limitful",
+    "ci": "turbo run ci --filter=limitful"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.7"
+  },
+  "packageManager": "npm@11.4.2"
+}

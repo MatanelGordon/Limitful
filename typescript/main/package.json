@@ -1,0 +1,35 @@
+{
+  "name": "limitful",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Limitful distributed synchronization — TypeScript implementation",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "test": "vitest run --no-coverage",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "clean": "rm -rf dist",
+    "ci": "tsc --noEmit && vitest run --no-coverage && prettier --check \"src/**/*.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "eslint": "^9.0.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3",
+    "typescript-eslint": "^8.46.0"
+  }
+}
