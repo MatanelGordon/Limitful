@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "e7fa789",
+  "separate-pull-requests": true,
+  "skip-github-release": true,
+  "packages": {
+    "csharp/Limitful.Core": {
+      "release-type": "simple",
+      "package-name": "Limitful.Core",
+      "component": "csharp-core",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true,
+      "version-file": "version.txt",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "Limitful.Core.csproj",
+          "xpath": "//Version"
+        }
+      ]
+    },
+    "typescript/main": {
+      "release-type": "node",
+      "package-name": "limitful",
+      "component": "typescript-limitful",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true,
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "/typescript/package-lock.json",
+          "jsonpath": "$.packages.main.version"
+        }
+      ]
+    },
+    "rust/main": {
+      "release-type": "rust",
+      "package-name": "limitful",
+      "component": "rust-limitful",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true,
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "/rust/Cargo.lock",
+          "jsonpath": "$.package[?(@.name == 'limitful')].version"
+        }
+      ]
+    },
+    "go": {
+      "release-type": "go",
+      "package-name": "limitful",
+      "component": "go",
+      "tag-separator": "/",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true,
+      "changelog-path": "CHANGELOG.md"
+    },
+    "python/main": {
+      "release-type": "python",
+      "package-name": "limitful",
+      "component": "python-limitful",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true,
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "/python/uv.lock",
+          "jsonpath": "$.package[?(@.name == 'limitful')].version"
+        }
+      ]
+    }
+  }
+}

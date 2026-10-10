@@ -1,9 +1,24 @@
 {
   "name": "limitful",
   "version": "0.0.0",
-  "private": true,
   "description": "Limitful load-leveling utilities — TypeScript implementation",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MatanelGordon/Limitful.git",
+    "directory": "typescript/main"
+  },
+  "homepage": "https://github.com/MatanelGordon/Limitful#readme",
+  "bugs": {
+    "url": "https://github.com/MatanelGordon/Limitful/issues"
+  },
+  "keywords": [
+    "rate-limiting",
+    "load-leveling",
+    "concurrency"
+  ],
   "type": "module",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -14,6 +29,9 @@
     "dist/",
     "package.json"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "test": "vitest run --no-coverage",

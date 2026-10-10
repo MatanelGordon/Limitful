@@ -38,9 +38,9 @@ remain separate from the primary package using each ecosystem's native layout.
 | Go | `go/` | Module-root package with normal subpackages | `go test` |
 | Python | `python/main` | uv workspace | pytest |
 
-The scaffolds contain no library implementation and are marked private or
-non-publishable where their ecosystem provides such metadata. The small Python
-import test validates packaging only.
+The scaffolds contain no library implementation. Their publication metadata is
+prepared, but the release workflow rejects the placeholder `0.0.0` versions.
+The small Python import test validates packaging only.
 
 ## Development
 
@@ -65,6 +65,7 @@ Start at **[docs/README.md](./docs/README.md)** — the documentation index and 
 | [docs/architecture.md](./docs/architecture.md) | Component boundaries, invariants, composition, lifecycle, control-flow diagrams |
 | [docs/design-principles.md](./docs/design-principles.md) | Simple defaults with advanced opt-in, functional conventions, policy vs mechanism |
 | [docs/testing.md](./docs/testing.md) | The source of truth for test behavior, including the cross-language test matrix |
+| [docs/releasing.md](./docs/releasing.md) | Independent package versioning, trusted-publisher setup, tags, and release recovery |
 | [docs/decisions.md](./docs/decisions.md) | Consolidated decision log, with superseded, rejected, and unresolved items |
 | [docs/site/SPEC.md](./docs/site/SPEC.md) | Canonical documentation-site contract |
 | [docs/utilities/](./docs/utilities/) | One focused design document per utility |

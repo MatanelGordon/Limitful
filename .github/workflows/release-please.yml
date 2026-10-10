@@ -1,0 +1,29 @@
+name: Prepare package releases
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Update versions and changelogs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to update release branches and their version files.
+      pull-requests: write # Required to open and update the reviewable release PRs.
+    steps:
+      - name: Open or update independent release pull requests
+        uses: googleapis/release-please-action@0dfd8538845b8e92600d271a895a5372865d4062 # v5.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-release: true

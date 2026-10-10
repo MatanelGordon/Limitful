@@ -3,7 +3,18 @@
     <TargetFrameworks>net8.0;netstandard2.0</TargetFrameworks>
     <PackageId>Limitful.Core</PackageId>
     <Version>0.0.0</Version>
-    <IsPackable>false</IsPackable>
-    <IsPublishable>false</IsPublishable>
+    <Authors>Matanel Gordon</Authors>
+    <Description>Load-leveling and rate-limiting primitives for .NET.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>rate-limiting;load-leveling;concurrency</PackageTags>
+    <RepositoryUrl>https://github.com/MatanelGordon/Limitful</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <IsPackable>true</IsPackable>
+    <IsPublishable>true</IsPublishable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,7 @@
+{
+  "csharp/Limitful.Core": "0.0.0",
+  "typescript/main": "0.0.0",
+  "rust/main": "0.0.0",
+  "go": "0.0.0",
+  "python/main": "0.0.0"
+}

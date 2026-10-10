@@ -21,3 +21,6 @@ Thumbs.db
 # Repository-level tool caches
 .turbo/
 .turbo-cache/
+
+# Local package/release output
+.release-artifacts/

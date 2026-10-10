@@ -1,0 +1,457 @@
+name: Publish one package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to validate or publish
+        required: true
+        type: choice
+        options:
+          - csharp/Limitful.Core
+          - typescript/main
+          - rust/main
+          - go
+          - python/main
+      mode:
+        description: Dry-run, publish, or finish a version already present in its registry
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+          - finalize-existing
+      confirmation:
+        description: Type PUBLISH for publish or finalize-existing; leave empty for dry-run
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: publish-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Authorize and validate selection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      changelog: ${{ steps.package.outputs.changelog }}
+      default_branch: ${{ steps.package.outputs.default_branch }}
+      display_name: ${{ steps.package.outputs.display_name }}
+      ecosystem: ${{ steps.package.outputs.ecosystem }}
+      owner: ${{ steps.package.outputs.owner }}
+      package_name: ${{ steps.package.outputs.package_name }}
+      path: ${{ steps.package.outputs.path }}
+      repository: ${{ steps.package.outputs.repository }}
+      tag: ${{ steps.package.outputs.tag }}
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enforce owner, repository, branch, and confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          MODE: ${{ inputs.mode }}
+          REPOSITORY: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REF_NAME: ${{ github.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$REPOSITORY" == "MatanelGordon/Limitful" ]] || {
+            echo "This workflow is locked to MatanelGordon/Limitful." >&2
+            exit 1
+          }
+          [[ "$ACTOR" == "MatanelGordon" && "$TRIGGERING_ACTOR" == "MatanelGordon" ]] || {
+            echo "Only MatanelGordon may run or rerun package publication." >&2
+            exit 1
+          }
+          [[ "$REF_NAME" == "refs/heads/master" ]] || {
+            echo "Package publication must run from master." >&2
+            exit 1
+          }
+          if [[ "$MODE" != "dry-run" && "$CONFIRMATION" != "PUBLISH" ]]; then
+            echo "Mutating modes require the exact confirmation PUBLISH." >&2
+            exit 1
+          fi
+
+      - name: Require the current master commit
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ "$(git rev-parse origin/master)" == "$EXPECTED_SHA" ]] || {
+            echo "master moved after this workflow was dispatched; start a new run." >&2
+            exit 1
+          }
+
+      - name: Read package metadata
+        id: package
+        env:
+          PACKAGE_ID: ${{ inputs.package }}
+        shell: bash
+        run: python3 .github/release/release.py metadata "$PACKAGE_ID" --release-ready --github-output "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ needs.metadata.outputs.display_name }}
+    needs: metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the validated commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Recheck the immutable source commit
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ "$(git rev-parse origin/master)" == "$EXPECTED_SHA" ]] || {
+            echo "master moved after validation; start a new run." >&2
+            exit 1
+          }
+
+      - name: Set up .NET
+        if: needs.metadata.outputs.ecosystem == 'nuget'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.0.1
+        with:
+          global-json-file: csharp/global.json
+
+      - name: Pack NuGet package
+        if: needs.metadata.outputs.ecosystem == 'nuget'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package"
+          dotnet test csharp/Limitful.sln --configuration Release
+          dotnet pack csharp/Limitful.Core/Limitful.Core.csproj \
+            --configuration Release \
+            --no-restore \
+            --output "$RUNNER_TEMP/package" \
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Set up Node.js
+        if: needs.metadata.outputs.ecosystem == 'npm'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Pack npm package
+        if: needs.metadata.outputs.ecosystem == 'npm'
+        shell: bash
+        run: | # zizmor: ignore[adhoc-packages] npm 12.2.0 is pinned and required for staged publishing
+          set -euo pipefail
+          npm install --global npm@12.2.0
+          npm --prefix typescript ci
+          npm --prefix typescript run ci --workspace limitful
+          mkdir -p "$RUNNER_TEMP/package"
+          npm --prefix typescript pack --workspace limitful --ignore-scripts \
+            --pack-destination "$RUNNER_TEMP/package"
+
+      - name: Set up Rust
+        if: needs.metadata.outputs.ecosystem == 'cargo'
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # zizmor: ignore[superfluous-actions] pinned stable toolchain
+
+      - name: Verify crates.io package
+        if: needs.metadata.outputs.ecosystem == 'cargo'
+        shell: bash
+        run: cargo publish --dry-run --locked --manifest-path rust/main/Cargo.toml
+
+      - name: Set up Go
+        if: needs.metadata.outputs.ecosystem == 'go'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version-file: go/go.mod
+          cache: false
+
+      - name: Verify Go module
+        if: needs.metadata.outputs.ecosystem == 'go'
+        shell: bash
+        run: go -C go test ./...
+
+      - name: Set up uv
+        if: needs.metadata.outputs.ecosystem == 'pypi'
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7.1.4
+        with:
+          version: 0.11.2
+          enable-cache: false
+
+      - name: Build Python distributions
+        if: needs.metadata.outputs.ecosystem == 'pypi'
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv --directory python sync --locked --all-packages
+          uv --directory python run --package limitful pytest
+          mkdir -p "$RUNNER_TEMP/package"
+          uv --directory python build --package limitful --out-dir "$RUNNER_TEMP/package"
+
+      - name: Upload the exact registry artifact
+        if: contains(fromJSON('["nuget", "npm", "pypi"]'), needs.metadata.outputs.ecosystem)
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: ${{ needs.metadata.outputs.artifact_name }}
+          path: ${{ runner.temp }}/package/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: ${{ inputs.mode }} ${{ needs.metadata.outputs.display_name }}
+    if: inputs.mode != 'dry-run'
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-latest
+    environment: publishing
+    permissions:
+      contents: write # Required to create and finalize the package tag and GitHub release.
+      id-token: write # Required for short-lived npm, NuGet, PyPI, and crates.io credentials.
+    steps:
+      - name: Check out the validated commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Repeat all authorization and source checks after approval
+        env:
+          ACTOR: ${{ github.actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$REPOSITORY" == "MatanelGordon/Limitful" ]]
+          [[ "$ACTOR" == "MatanelGordon" && "$TRIGGERING_ACTOR" == "MatanelGordon" ]]
+          [[ "$REF_NAME" == "refs/heads/master" ]]
+          [[ "$CONFIRMATION" == "PUBLISH" ]]
+          git fetch --no-tags origin master
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ "$(git rev-parse origin/master)" == "$EXPECTED_SHA" ]] || {
+            echo "master moved while the environment approval was pending; start a new run." >&2
+            exit 1
+          }
+
+      - name: Revalidate package metadata
+        env:
+          PACKAGE_ID: ${{ inputs.package }}
+        shell: bash
+        run: python3 .github/release/release.py validate "$PACKAGE_ID" --release-ready
+
+      - name: Download the built registry artifact
+        if: contains(fromJSON('["nuget", "npm", "pypi"]'), needs.metadata.outputs.ecosystem)
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: ${{ needs.metadata.outputs.artifact_name }}
+          path: package
+
+      - name: Set up .NET for NuGet
+        if: needs.metadata.outputs.ecosystem == 'nuget'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.0.1
+        with:
+          global-json-file: csharp/global.json
+
+      - name: Set up Node.js for npm
+        if: needs.metadata.outputs.ecosystem == 'npm'
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install the trusted-publishing npm CLI
+        if: needs.metadata.outputs.ecosystem == 'npm'
+        shell: bash
+        run: npm install --global npm@12.2.0 # zizmor: ignore[adhoc-packages] pinned CLI required for OIDC staging
+
+      - name: Set up Rust for crates.io
+        if: needs.metadata.outputs.ecosystem == 'cargo'
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # zizmor: ignore[superfluous-actions] pinned stable toolchain
+
+      - name: Check registry state
+        id: registry
+        env:
+          ECOSYSTEM: ${{ needs.metadata.outputs.ecosystem }}
+          MODE: ${{ inputs.mode }}
+          PACKAGE_NAME: ${{ needs.metadata.outputs.package_name }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          exists=false
+          case "$ECOSYSTEM" in
+            npm)
+              if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then exists=true; fi
+              ;;
+            pypi)
+              if curl --fail --silent --show-error \
+                "https://pypi.org/pypi/$PACKAGE_NAME/$VERSION/json" >/dev/null 2>&1; then exists=true; fi
+              ;;
+            nuget)
+              lower_name="${PACKAGE_NAME,,}"
+              if curl --fail --silent --show-error \
+                "https://api.nuget.org/v3-flatcontainer/$lower_name/$VERSION/$lower_name.$VERSION.nupkg" \
+                --output /dev/null 2>/dev/null; then exists=true; fi
+              ;;
+            cargo)
+              if curl --fail --silent --show-error \
+                --user-agent "Limitful release workflow (https://github.com/MatanelGordon/Limitful)" \
+                "https://crates.io/api/v1/crates/$PACKAGE_NAME/$VERSION" >/dev/null 2>&1; then exists=true; fi
+              ;;
+            go)
+              ;;
+            *)
+              echo "Unsupported ecosystem: $ECOSYSTEM" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$MODE" == "publish" && "$exists" == "true" ]]; then
+            echo "$PACKAGE_NAME@$VERSION already exists; use finalize-existing only for recovery." >&2
+            exit 1
+          fi
+          if [[ "$MODE" == "finalize-existing" && "$ECOSYSTEM" != "go" && "$exists" != "true" ]]; then
+            echo "$PACKAGE_NAME@$VERSION is not public yet, so there is nothing to finalize." >&2
+            exit 1
+          fi
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+      - name: Create or verify the exact package tag and draft release
+        env:
+          DISPLAY_NAME: ${{ needs.metadata.outputs.display_name }}
+          ECOSYSTEM: ${{ needs.metadata.outputs.ecosystem }}
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          PACKAGE_ID: ${{ inputs.package }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_exists=false
+          if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            tag_exists=true
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            [[ "$(git rev-list -n 1 "refs/tags/$TAG")" == "$SHA" ]] || {
+              echo "Existing tag $TAG does not point to $SHA; refusing to move it." >&2
+              exit 1
+            }
+          fi
+
+          release_state="$(gh release view "$TAG" --repo "$REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ "$MODE" == "publish" ]]; then
+            [[ "$tag_exists" == "false" && -z "$release_state" ]] || {
+              echo "Tag or release $TAG already exists; use finalize-existing only after registry publication." >&2
+              exit 1
+            }
+          else
+            if [[ "$ECOSYSTEM" == "go" && "$tag_exists" == "false" ]]; then
+              echo "A Go finalize requires the matching draft tag from an earlier publish run." >&2
+              exit 1
+            fi
+            [[ -z "$release_state" || "$release_state" == "true" ]] || {
+              echo "GitHub release $TAG is already final." >&2
+              exit 1
+            }
+          fi
+
+          python3 .github/release/release.py notes "$PACKAGE_ID" --output "$RUNNER_TEMP/release-notes.md"
+          if [[ -z "$release_state" ]]; then
+            create_args=("$TAG" --repo "$REPOSITORY" --draft --title "$DISPLAY_NAME $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md")
+            if [[ "$tag_exists" == "true" ]]; then
+              create_args+=(--verify-tag)
+            else
+              create_args+=(--target "$SHA")
+            fi
+            gh release create "${create_args[@]}"
+          fi
+
+          git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          [[ "$(git rev-list -n 1 "refs/tags/$TAG")" == "$SHA" ]] || {
+            echo "Created tag $TAG does not resolve to the validated commit." >&2
+            exit 1
+          }
+
+      - name: Stage npm package for owner OTP approval
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'npm'
+        shell: bash
+        run: npm stage publish package/*.tgz --access public
+
+      - name: Authenticate to NuGet with OIDC
+        id: nuget_login
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'nuget'
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1.0.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish NuGet package
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'nuget'
+        env:
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+        shell: bash
+        run: dotnet nuget push 'package/*.nupkg' --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+      - name: Publish Python distributions to PyPI with OIDC
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'pypi'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: package/
+
+      - name: Authenticate to crates.io with OIDC
+        id: crates_auth
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'cargo'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.1
+
+      - name: Publish Rust crate
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'cargo'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates_auth.outputs.token }}
+        shell: bash
+        run: cargo publish --locked --no-verify --manifest-path rust/main/Cargo.toml
+
+      - name: Keep npm release draft until OTP approval
+        if: inputs.mode == 'publish' && needs.metadata.outputs.ecosystem == 'npm'
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          echo "### npm package staged" >> "$GITHUB_STEP_SUMMARY"
+          echo "Approve the staged package with OTP on npmjs.com, then rerun this workflow" >> "$GITHUB_STEP_SUMMARY"
+          echo "for the same package in \`finalize-existing\` mode. GitHub release \`$TAG\` remains draft." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Finalize the GitHub release
+        if: inputs.mode == 'finalize-existing' || (inputs.mode == 'publish' && needs.metadata.outputs.ecosystem != 'npm')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: gh release edit "$TAG" --repo "$REPOSITORY" --draft=false --latest=false

@@ -1,0 +1,130 @@
+{
+  "repository": "MatanelGordon/Limitful",
+  "owner": "MatanelGordon",
+  "default_branch": "master",
+  "packages": {
+    "csharp/Limitful.Core": {
+      "display_name": "Limitful.Core",
+      "ecosystem": "nuget",
+      "package_name": "Limitful.Core",
+      "path": "csharp/Limitful.Core",
+      "tag_prefix": "csharp-core-v",
+      "changelog": "csharp/Limitful.Core/CHANGELOG.md",
+      "artifact_name": "csharp-limitful-core",
+      "version_sources": [
+        {
+          "type": "text",
+          "path": "csharp/Limitful.Core/version.txt"
+        },
+        {
+          "type": "xml",
+          "path": "csharp/Limitful.Core/Limitful.Core.csproj",
+          "xpath": "./PropertyGroup/Version"
+        },
+        {
+          "type": "release-manifest",
+          "path": ".release-please-manifest.json",
+          "key": "csharp/Limitful.Core"
+        }
+      ]
+    },
+    "typescript/main": {
+      "display_name": "limitful (npm)",
+      "ecosystem": "npm",
+      "package_name": "limitful",
+      "path": "typescript/main",
+      "tag_prefix": "typescript-limitful-v",
+      "changelog": "typescript/main/CHANGELOG.md",
+      "artifact_name": "typescript-limitful",
+      "version_sources": [
+        {
+          "type": "json",
+          "path": "typescript/main/package.json",
+          "keys": ["version"]
+        },
+        {
+          "type": "json",
+          "path": "typescript/package-lock.json",
+          "keys": ["packages", "main", "version"]
+        },
+        {
+          "type": "release-manifest",
+          "path": ".release-please-manifest.json",
+          "key": "typescript/main"
+        }
+      ]
+    },
+    "rust/main": {
+      "display_name": "limitful (crates.io)",
+      "ecosystem": "cargo",
+      "package_name": "limitful",
+      "path": "rust/main",
+      "tag_prefix": "rust-limitful-v",
+      "changelog": "rust/main/CHANGELOG.md",
+      "artifact_name": "rust-limitful",
+      "version_sources": [
+        {
+          "type": "toml",
+          "path": "rust/main/Cargo.toml",
+          "keys": ["package", "version"]
+        },
+        {
+          "type": "toml-array",
+          "path": "rust/Cargo.lock",
+          "array": "package",
+          "name": "limitful",
+          "field": "version"
+        },
+        {
+          "type": "release-manifest",
+          "path": ".release-please-manifest.json",
+          "key": "rust/main"
+        }
+      ]
+    },
+    "go": {
+      "display_name": "limitful (Go)",
+      "ecosystem": "go",
+      "package_name": "github.com/MatanelGordon/Limitful/go",
+      "path": "go",
+      "tag_prefix": "go/v",
+      "changelog": "go/CHANGELOG.md",
+      "artifact_name": "go-limitful",
+      "version_sources": [
+        {
+          "type": "release-manifest",
+          "path": ".release-please-manifest.json",
+          "key": "go"
+        }
+      ]
+    },
+    "python/main": {
+      "display_name": "limitful (PyPI)",
+      "ecosystem": "pypi",
+      "package_name": "limitful",
+      "path": "python/main",
+      "tag_prefix": "python-limitful-v",
+      "changelog": "python/main/CHANGELOG.md",
+      "artifact_name": "python-limitful",
+      "version_sources": [
+        {
+          "type": "toml",
+          "path": "python/main/pyproject.toml",
+          "keys": ["project", "version"]
+        },
+        {
+          "type": "toml-array",
+          "path": "python/uv.lock",
+          "array": "package",
+          "name": "limitful",
+          "field": "version"
+        },
+        {
+          "type": "release-manifest",
+          "path": ".release-please-manifest.json",
+          "key": "python/main"
+        }
+      ]
+    }
+  }
+}

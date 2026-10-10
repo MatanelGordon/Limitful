@@ -4,8 +4,23 @@ version = "0.0.0"
 description = "Python package scaffold for Limitful"
 readme = "README.md"
 license = "MIT"
+authors = [
+    { name = "Matanel Gordon" },
+]
 requires-python = ">=3.11"
 dependencies = []
+keywords = ["rate-limiting", "load-leveling", "concurrency"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+
+[project.urls]
+Homepage = "https://github.com/MatanelGordon/Limitful"
+Repository = "https://github.com/MatanelGordon/Limitful"
+Issues = "https://github.com/MatanelGordon/Limitful/issues"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13"]

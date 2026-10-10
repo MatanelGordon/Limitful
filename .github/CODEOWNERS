@@ -1,0 +1,6 @@
+# The release control plane always requires the repository owner.
+/.github/workflows/release-please.yml @MatanelGordon
+/.github/workflows/publish.yml @MatanelGordon
+/.github/release/ @MatanelGordon
+/release-please-config.json @MatanelGordon
+/.release-please-manifest.json @MatanelGordon
